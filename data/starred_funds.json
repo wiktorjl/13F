@@ -1,0 +1,41 @@
+{
+  "name": "Prominent 13F manager watchlist",
+  "selected_at": "2026-08-17",
+  "methodology": "Editorial selection of 20 active Form 13F managers based on current 2025-2026 manager earnings, hedge-fund assets under management, market influence, and the usefulness of their disclosed equity books for 13F research. This is not a performance ranking, endorsement, or investment advice.",
+  "sources": [
+    {
+      "name": "Institutional Investor 2026 Rich List",
+      "url": "https://www.institutionalinvestor.com/article/hedge-funds/rich-list-institutional-investors-25th-annual-ranking-highest-earning-hedge"
+    },
+    {
+      "name": "With Intelligence Global Billion Dollar Club Top 20 H1 2025",
+      "url": "https://www.withintelligence.com/insights/billion-dollar-club-h1-2025/"
+    },
+    {
+      "name": "HedgeTrace Top Hedge Fund Managers 2026",
+      "url": "https://hedgetrace.com/learn/top-hedge-fund-managers"
+    }
+  ],
+  "funds": [
+    {"brand": "Berkshire Hathaway", "cik": "0001067983"},
+    {"brand": "Bridgewater Associates", "cik": "0001350694"},
+    {"brand": "Renaissance Technologies", "cik": "0001037389"},
+    {"brand": "Pershing Square", "cik": "0001336528"},
+    {"brand": "Baupost Group", "cik": "0001061768"},
+    {"brand": "Elliott Investment Management", "cik": "0001791786"},
+    {"brand": "Citadel", "cik": "0001423053"},
+    {"brand": "Millennium Management", "cik": "0001273087"},
+    {"brand": "Tiger Global Management", "cik": "0001167483"},
+    {"brand": "Coatue Management", "cik": "0001135730"},
+    {"brand": "Appaloosa", "cik": "0001656456"},
+    {"brand": "Duquesne Family Office", "cik": "0001536411"},
+    {"brand": "Third Point", "cik": "0001040273"},
+    {"brand": "Greenlight Capital (DME Capital Management filer)", "cik": "0001489933"},
+    {"brand": "TCI Fund Management", "cik": "0001647251"},
+    {"brand": "Viking Global Investors", "cik": "0001103804"},
+    {"brand": "Lone Pine Capital", "cik": "0001061165"},
+    {"brand": "D. E. Shaw", "cik": "0001009207"},
+    {"brand": "Soros Fund Management", "cik": "0001029160"},
+    {"brand": "Icahn", "cik": "0000921669"}
+  ]
+}

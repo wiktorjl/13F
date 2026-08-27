@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Deterministic verification workflow for the local 13F Explorer."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import py_compile
+import shutil
+import sqlite3
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any, Callable
+from urllib.parse import urlencode
+
+import build_database
+import server
+from tests.chromium_walkthrough import run_walkthrough
+from tests.support import create_fixture_database, http_request, running_server
+
+ROOT = Path(__file__).resolve().parent
+
+
+class VerificationFailure(RuntimeError):
+    pass
+
+
+class DocumentAudit(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.ids: list[str] = []
+        self.scripts: list[str] = []
+        self.stylesheets: list[str] = []
+        self.inline_scripts = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if values.get("id"):
+            self.ids.append(str(values["id"]))
+        if tag == "script":
+            if values.get("src"):
+                self.scripts.append(str(values["src"]))
+            else:
+                self.inline_scripts += 1
+        if tag == "link" and "stylesheet" in str(values.get("rel", "")).split():
+            if values.get("href"):
+                self.stylesheets.append(str(values["href"]))
+
+
+def syntax_checks() -> dict[str, Any]:
+    python_files = sorted(ROOT.glob("*.py")) + sorted((ROOT / "tests").glob("*.py"))
+    for path in python_files:
+        py_compile.compile(str(path), doraise=True)
+
+    node = shutil.which("node")
+    if not node:
+        raise VerificationFailure("Node.js is required for the deterministic app.js syntax check")
+    result = subprocess.run(
+        [node, "--check", str(ROOT / "app.js")],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode:
+        raise VerificationFailure(f"app.js syntax check failed:\n{result.stdout}")
+
+    audit = DocumentAudit()
+    audit.feed((ROOT / "index.html").read_text(encoding="utf-8"))
+    duplicates = sorted(identifier for identifier in set(audit.ids) if audit.ids.count(identifier) > 1)
+    if duplicates:
+        raise VerificationFailure(f"index.html contains duplicate IDs: {duplicates}")
+    if audit.inline_scripts:
+        raise VerificationFailure("index.html contains inline script that violates the static CSP")
+    if audit.scripts != ["app.js"] or audit.stylesheets != ["styles.css"]:
+        raise VerificationFailure(
+            f"Unexpected local assets in index.html: scripts={audit.scripts}, styles={audit.stylesheets}"
+        )
+    return {"python_files": len(python_files), "javascript": "node --check", "html_ids": len(audit.ids)}
+
+
+def run_unittests() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-v", "-s", "tests"], cwd=ROOT
+    )
+    if result.returncode:
+        raise VerificationFailure("The unittest suite failed")
+
+
+def _scalar(con: sqlite3.Connection, sql: str, values: tuple[Any, ...] = ()) -> Any:
+    row = con.execute(sql, values).fetchone()
+    return row[0] if row is not None else None
+
+
+def check_database(path: Path, *, require_fresh: bool) -> dict[str, Any]:
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise VerificationFailure(f"Database is missing: {path}")
+    if require_fresh:
+        if path != server.DB.resolve():
+            raise VerificationFailure("Freshness hashing is only defined for the configured production database")
+        if not server.database_is_current():
+            raise VerificationFailure(
+                "Production database is stale or incomplete; run `python3 build_database.py --force`"
+            )
+    uri = f"file:{path}?mode=ro"
+    with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=30)) as con:
+        quick_check = [row[0] for row in con.execute("PRAGMA quick_check")]
+        if quick_check != ["ok"]:
+            raise VerificationFailure("PRAGMA quick_check failed: " + "; ".join(quick_check))
+        con.execute("PRAGMA query_only=ON")
+        period_count = int(_scalar(con, "SELECT count(*) FROM periods"))
+        build_database.validate_database(con, expected_period_count=period_count)
+        zero_checks = {
+            "invalid manager flags": "SELECT count(*) FROM managers WHERE starred NOT IN (0,1)",
+            "invalid positions": """SELECT count(*) FROM positions
+              WHERE value<0 OR shares<0 OR position_type NOT IN (0,1,2) OR shares_type NOT IN (0,1,2)""",
+            "orphan changes": """SELECT count(*) FROM stock_changes c
+              LEFT JOIN periods current ON current.id=c.current_period_id
+              LEFT JOIN periods previous ON previous.id=c.previous_period_id
+              LEFT JOIN securities s ON s.id=c.security_id
+              WHERE current.id IS NULL OR previous.id IS NULL OR s.id IS NULL
+                OR current.period_date<=previous.period_date""",
+            "orphan change totals": """SELECT count(*) FROM period_change_totals t
+              LEFT JOIN periods current ON current.id=t.current_period_id
+              LEFT JOIN periods previous ON previous.id=t.previous_period_id
+              WHERE current.id IS NULL OR previous.id IS NULL OR current.period_date<=previous.period_date""",
+            "invalid market caps": "SELECT count(*) FROM market_caps WHERE market_cap<=0",
+        }
+        failures = []
+        for label, sql in zero_checks.items():
+            count = int(_scalar(con, sql))
+            if count:
+                failures.append(f"{label}: {count}")
+
+        metadata = dict(con.execute("SELECT key,value FROM metadata"))
+        count_tables = {
+            "period_count": "periods",
+            "manager_count": "managers",
+            "security_count": "securities",
+            "position_count": "positions",
+        }
+        for key, table in count_tables.items():
+            actual = int(_scalar(con, f"SELECT count(*) FROM {table}"))
+            if metadata.get(key) != str(actual):
+                failures.append(f"metadata {key}: expected {actual}, found {metadata.get(key)!r}")
+        latest = _scalar(con, "SELECT label FROM periods ORDER BY period_date DESC LIMIT 1")
+        if metadata.get("latest_period") != latest:
+            failures.append(
+                f"metadata latest_period: expected {latest!r}, found {metadata.get('latest_period')!r}"
+            )
+        if metadata.get("schema_version") != server.SCHEMA_VERSION:
+            failures.append(
+                f"schema version: expected {server.SCHEMA_VERSION}, found {metadata.get('schema_version')!r}"
+            )
+        if failures:
+            raise VerificationFailure("Database invariant failures: " + " | ".join(failures))
+        return {
+            "path": str(path),
+            "bytes": path.stat().st_size,
+            "schema_version": metadata["schema_version"],
+            "periods": period_count,
+            "managers": int(metadata["manager_count"]),
+            "securities": int(metadata["security_count"]),
+            "positions": int(metadata["position_count"]),
+            "quick_check": "ok",
+            "fresh": require_fresh,
+        }
+
+
+def _sample_entities(database: Path) -> tuple[str, str, str, str]:
+    uri = f"file:{Path(database).resolve()}?mode=ro"
+    with contextlib.closing(sqlite3.connect(uri, uri=True)) as con:
+        latest_id, latest_label = con.execute(
+            "SELECT id,label FROM periods ORDER BY period_date DESC LIMIT 1"
+        ).fetchone()
+        cik, manager_name = con.execute(
+            """SELECT m.cik,m.name FROM positions p JOIN managers m ON m.id=p.manager_id
+            WHERE p.period_id=? GROUP BY m.id ORDER BY sum(p.value) DESC,m.cik LIMIT 1""",
+            (latest_id,),
+        ).fetchone()
+        cusip = con.execute(
+            """SELECT s.cusip FROM positions p JOIN securities s ON s.id=p.security_id
+            WHERE p.period_id=? GROUP BY s.id ORDER BY sum(p.value) DESC,s.cusip LIMIT 1""",
+            (latest_id,),
+        ).fetchone()[0]
+    return str(latest_label), str(cik), str(cusip), str(manager_name)
+
+
+def api_smoke_and_performance(
+    database: Path, *, repetitions: int = 2, budget_seconds: float = 5.0
+) -> dict[str, dict[str, float]]:
+    latest, cik, cusip, manager_name = _sample_entities(database)
+    suggestion = manager_name[:2]
+    endpoints: dict[str, tuple[str, set[str] | None]] = {
+        "meta": ("/api/meta", {"periods", "latest_period", "holding_count"}),
+        "holdings": ("/api/holdings?" + urlencode({"period": latest, "page": 1, "size": 10}), {"rows", "count", "value"}),
+        "aggregate": ("/api/aggregate?" + urlencode({"period": latest, "group": "issuer", "page": 1, "size": 10}), {"rows", "count", "group"}),
+        "funds": ("/api/funds?" + urlencode({"period": latest, "page": 1, "size": 10}), {"rows", "count", "starred_count"}),
+        "suggest": ("/api/suggest?" + urlencode({"kind": "manager", "q": suggestion}), None),
+        "stock-detail": ("/api/stock-detail?" + urlencode({"cusip": cusip, "period": latest, "page": 1, "size": 10}), {"security", "rows", "summary"}),
+        "fund-detail": ("/api/fund-detail?" + urlencode({"cik": cik, "period": latest, "page": 1, "size": 10}), {"manager", "rows", "summary"}),
+        "net-adds": ("/api/net-adds?" + urlencode({"metric": "value", "position": "SHARES", "page": 1, "size": 10}), {"periods", "rows", "count"}),
+    }
+    measurements: dict[str, dict[str, float]] = {}
+    with running_server(database) as address:
+        for name, (path, required_keys) in endpoints.items():
+            durations = []
+            payload: Any = None
+            for index in range(repetitions + 1):
+                started = time.perf_counter()
+                status, headers, body = http_request(address, path)
+                elapsed = time.perf_counter() - started
+                if status != 200:
+                    raise VerificationFailure(
+                        f"API smoke {name} returned HTTP {status}: {body.decode(errors='replace')}"
+                    )
+                if headers.get("content-type") != "application/json; charset=utf-8":
+                    raise VerificationFailure(f"API smoke {name} returned the wrong content type")
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError as exc:
+                    raise VerificationFailure(f"API smoke {name} returned invalid JSON") from exc
+                if index:
+                    durations.append(elapsed)
+            if required_keys is not None:
+                if not isinstance(payload, dict) or not required_keys.issubset(payload):
+                    raise VerificationFailure(f"API smoke {name} response is missing {required_keys}")
+            elif not isinstance(payload, list):
+                raise VerificationFailure(f"API smoke {name} response should be a list")
+            maximum = max(durations)
+            if maximum > budget_seconds:
+                raise VerificationFailure(
+                    f"API performance budget exceeded for {name}: {maximum:.3f}s > {budget_seconds:.3f}s"
+                )
+            measurements[name] = {
+                "median_seconds": round(statistics.median(durations), 6),
+                "max_seconds": round(maximum, 6),
+            }
+    return measurements
+
+
+def run_step(name: str, function: Callable[[], Any]) -> Any:
+    print(f"\n==> {name}", flush=True)
+    started = time.monotonic()
+    result = function()
+    print(f"PASS {name} ({time.monotonic() - started:.2f}s)", flush=True)
+    if result is not None:
+        print(json.dumps(result, indent=2, sort_keys=True), flush=True)
+    return result
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--fast", action="store_true", help="Use only the tiny fixture; skip production DB and Chromium")
+    mode.add_argument("--ci", action="store_true", help="CI alias for --fast; never reads or rebuilds production data")
+    parser.add_argument("--database", type=Path, default=server.DB, help="Production database for full verification")
+    parser.add_argument("--skip-browser", action="store_true", help="Skip Chromium in full mode")
+    parser.add_argument("--chromium", help="Chromium executable (or set CHROMIUM)")
+    parser.add_argument("--api-budget", type=float, default=5.0, help="Maximum warmed API response time")
+    parser.add_argument(
+        "--browser-report",
+        type=Path,
+        default=ROOT / "artifacts" / "chromium-report.json",
+        help="JSON report; desktop/mobile PNGs are written beside it",
+    )
+    args = parser.parse_args()
+    if args.api_budget <= 0:
+        parser.error("--api-budget must be positive")
+    return args
+
+
+def main() -> int:
+    args = parse_args()
+    fast = args.fast or args.ci
+    try:
+        run_step("Python, JavaScript, and HTML syntax", syntax_checks)
+        run_step("stdlib unittest suite", run_unittests)
+        if fast:
+            with tempfile.TemporaryDirectory(prefix="13f-verify-") as directory:
+                fixture = create_fixture_database(Path(directory) / "fixture.sqlite")
+                run_step("fixture quick_check and invariants", lambda: check_database(fixture, require_fresh=False))
+                run_step(
+                    "fixture API smoke and performance",
+                    lambda: api_smoke_and_performance(
+                        fixture, repetitions=2, budget_seconds=min(args.api_budget, 5.0)
+                    ),
+                )
+            print("\nFAST VERIFICATION PASSED (production database and Chromium intentionally not used)")
+            return 0
+
+        database = args.database.resolve()
+        if database != server.DB.resolve():
+            server.DB = database
+        run_step("production freshness, quick_check, and invariants", lambda: check_database(database, require_fresh=True))
+        run_step(
+            "production API smoke and performance",
+            lambda: api_smoke_and_performance(
+                database, repetitions=2, budget_seconds=args.api_budget
+            ),
+        )
+        if not args.skip_browser:
+            report = run_step(
+                "full-data Chromium walkthrough",
+                lambda: run_walkthrough(
+                    database, chromium=args.chromium, report_path=args.browser_report
+                ),
+            )
+            print("Screenshots:")
+            for name, path in report.get("screenshots", {}).items():
+                print(f"  {name}: {path}")
+        print("\nFULL VERIFICATION PASSED")
+        return 0
+    except (VerificationFailure, OSError, ValueError, sqlite3.Error) as exc:
+        print(f"\nVERIFICATION FAILED: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"\nVERIFICATION FAILED: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

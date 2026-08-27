@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>13F Explorer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231f4f46'/%3E%3Cpath d='M15 43h34M19 36l8-9 8 6 11-14' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">Skip to data</a>
+
+  <header class="app-header">
+    <div class="app-title">
+      <div>
+        <h1>13F Explorer</h1>
+        <p>Research delayed quarter-end 13F snapshots. Filings can arrive up to 45 days later.</p>
+      </div>
+      <p id="sourceSummary" class="source-summary">Loading dataset…</p>
+    </div>
+    <dl class="dataset-summary" aria-label="Dataset summary">
+      <div><dt>Dataset span</dt><dd id="statPeriod">—</dd></div>
+      <div><dt>13F reported value</dt><dd id="statValue">—</dd></div>
+      <div><dt>Positions</dt><dd id="statPositions">—</dd></div>
+      <div><dt>Managers</dt><dd id="statManagers">—</dd></div>
+      <div><dt>Securities</dt><dd id="statIssuers">—</dd></div>
+    </dl>
+  </header>
+
+  <main id="mainContent" class="app-main" tabindex="-1">
+    <nav class="view-navigation" aria-label="Data views">
+      <div class="tabs primary-tabs" role="tablist" aria-label="Choose a workspace">
+        <button id="tab-funds" class="active" type="button" role="tab" aria-selected="true" aria-controls="funds" data-primary-tab="funds">
+          <span>Funds</span><small>Browse filing managers</small>
+        </button>
+        <button id="tab-securities" type="button" role="tab" aria-selected="false" aria-controls="securities" tabindex="-1" data-primary-tab="securities">
+          <span>Securities</span><small>Browse, compare, and inspect</small>
+        </button>
+      </div>
+    </nav>
+
+    <details id="sharedFilters" class="filter-panel">
+      <summary class="filter-summary">
+        <span class="filter-summary-title"><strong id="filterHeading">Dataset filters</strong><small>Funds, Browse, and Positions</small></span>
+        <span id="activeFilterSummary" class="filter-scope">Latest available · All long positions</span>
+        <span id="activeFilterCount" class="filter-count" aria-live="polite">No filters applied</span>
+      </summary>
+      <div class="filter-content">
+      <form id="filtersForm" aria-labelledby="filterHeading">
+        <div class="primary-filter-grid">
+          <label class="field search-field"><span>Search ticker, issuer, manager, CUSIP, or CIK</span><input name="q" type="search" autocomplete="off" placeholder="Search all fields"></label>
+          <label class="field"><span>Reporting period</span><select name="period"><option id="latestPeriodOption" value="">Latest available quarter</option></select></label>
+          <label class="field"><span>Position type</span><select name="put_call"><option value="">All reported long positions</option><option value="SHARES">Non-option (SH / PRN / other)</option><option value="PUT">Long puts</option><option value="CALL">Long calls</option></select></label>
+          <div class="actions"><button class="primary" type="submit">Apply filters</button><button id="reset" type="button">Clear</button></div>
+        </div>
+        <details id="advancedFilters" class="advanced-filters">
+          <summary>Additional filters</summary>
+          <div class="advanced-filter-grid">
+            <label class="field"><span>Manager</span><input name="manager" list="managerSuggestions" autocomplete="off" placeholder="Name or part of name"></label>
+            <label class="field"><span>Issuer</span><input name="issuer" list="issuerSuggestions" autocomplete="off" placeholder="Name or part of name"></label>
+            <datalist id="managerSuggestions"></datalist><datalist id="issuerSuggestions"></datalist>
+            <label class="field"><span>CUSIP prefix</span><input name="cusip" autocomplete="off" placeholder="For example 037833"></label>
+            <label class="field"><span>State / country</span><select name="state"><option value="">All locations</option></select></label>
+            <label class="field"><span>Minimum position value ($)</span><input name="min_value" type="number" min="0" step="1000" inputmode="numeric" placeholder="No minimum"></label>
+            <label class="field"><span>Maximum position value ($)</span><input name="max_value" type="number" min="0" step="1000" inputmode="numeric" placeholder="No maximum"></label>
+          </div>
+        </details>
+      </form>
+      <details class="data-note">
+        <summary>Scope and limitations</summary>
+        <p>Form 13F reports gross-long shares and options held. It omits short stock and written options. Quarterly snapshots incorporate restatements and later new-holdings amendments. Filing-table totals are reconciled to SEC summaries; discrepancies remain browseable but are excluded from complete-filing comparisons.</p>
+      </details>
+      </div>
+    </details>
+
+    <div class="results">
+      <section id="funds" class="tab-panel active" role="tabpanel" aria-labelledby="tab-funds">
+        <header class="view-header">
+          <div><h2>Funds</h2><p>Browse filing managers. Open a manager to compare its reported positions between quarters.</p></div>
+          <div class="local-controls">
+            <label class="local-filter"><span>Find fund or CIK</span><input id="fundSearch" type="search" autocomplete="off" placeholder="Filter this list"></label>
+            <label class="local-filter scope-filter"><span>Fund scope</span><select id="fundScope"><option value="research" selected>Research universe ($1B+ or featured)</option><option value="all">All filers</option></select></label>
+            <label class="local-filter star-filter"><span>Research set</span><select id="fundStarFilter"><option value="all">All funds</option><option value="1">Featured only</option><option value="0">Other funds</option></select></label>
+          </div>
+        </header>
+        <div class="table-toolbar"><p id="fundSummary" aria-live="polite">Loading funds…</p><p>All columns are sortable.</p></div>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Fund directory table">
+          <table>
+            <caption class="sr-only">Filing managers and featured research set status matching the current filters</caption>
+            <thead><tr>
+              <th scope="col" class="numeric" data-fund-sort="starred" aria-sort="none"><button class="sort-button" type="button">Featured <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="identity-column" data-fund-sort="name" aria-sort="none"><button class="sort-button" type="button">Fund / manager <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric" data-fund-sort="filings" aria-sort="none"><button class="sort-button" type="button">Quarters <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric" data-fund-sort="positions" aria-sort="none"><button class="sort-button" type="button">Positions <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric" data-fund-sort="securities" aria-sort="none"><button class="sort-button" type="button">Securities <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric active-sort" data-fund-sort="value" aria-sort="descending"><button class="sort-button" type="button">Reported value <i aria-hidden="true">↓</i></button></th>
+              <th scope="col" class="numeric" data-fund-sort="signal_return" aria-sort="none"><button class="sort-button" type="button" title="Hypothetical return across priced inferred position-change signals">Signal return <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric" data-fund-sort="signal_pnl" aria-sort="none"><button class="sort-button" type="button" title="Hypothetical dollar result across priced inferred position-change signals">Signal P&amp;L <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric" data-fund-sort="signal_coverage" aria-sort="none"><button class="sort-button" type="button" title="Share of eligible inferred signals with usable price data">Priced signals <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-fund-sort="latest" aria-sort="none"><button class="sort-button" type="button">Latest filed <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-fund-sort="coverage" aria-sort="none"><button class="sort-button" type="button">Coverage <i aria-hidden="true"></i></button></th>
+            </tr></thead>
+            <tbody id="fundsBody"></tbody>
+          </table>
+        </div>
+        <nav class="pager" aria-label="Fund table pages"><button id="prevFundPage" type="button">Previous</button><span id="fundPageInfo" aria-live="polite">Page 1</span><button id="nextFundPage" type="button">Next</button></nav>
+        <details class="data-note"><summary>How the fund signal is estimated</summary><p>The signal infers split-normalized SH-unit changes from complete adjacent-quarter 13F filings, then measures each change from the first market close strictly after its filing through one common latest daily close. Increases and new positions are treated as long exposure; reductions and exits are treated as avoided exposure versus cash. Signal return and Signal P&amp;L are hypothetical research measures—not actual performance, trade dates, sale proceeds, or cost basis—and exclude dividends and trading costs. Funds are ranked only when at least 10 signals are priced, event coverage is at least 80%, and effective bets are at least 5. <span id="fundSignalSource">Price source and latest close date load with the fund data.</span></p></details>
+        <details class="data-note"><summary>About the $1B research-universe cutoff</summary><p>The default includes managers with at least $1 billion in latest disclosed 13F value plus every Featured manager. This is a browsing heuristic—not firm AUM or a quality judgment—and All filers keeps every manager available. Exact fund searches check the full directory. Obvious legacy-thousands value submissions are normalized for cutoff eligibility only; displayed Reported value remains as filed.</p></details>
+        <details class="data-note"><summary>About the featured research set</summary><p>This editorial set is a research shortcut, not a performance ranking or investment advice. It combines current manager prominence and earnings from <a href="https://www.institutionalinvestor.com/article/hedge-funds/rich-list-institutional-investors-25th-annual-ranking-highest-earning-hedge" target="_blank" rel="noreferrer">Institutional Investor's 2026 Rich List</a>, scale from <a href="https://www.withintelligence.com/insights/billion-dollar-club-h1-2025/" target="_blank" rel="noreferrer">With Intelligence's H1 2025 top-AUM list</a>, and widely followed 13F equity managers from <a href="https://hedgetrace.com/learn/top-hedge-fund-managers" target="_blank" rel="noreferrer">HedgeTrace's 2026 manager list</a>. Only active filers in this local dataset were selected, and exact SEC CIKs—not fuzzy names—determine inclusion. A 13F is delayed and does not show a manager's complete strategy.</p></details>
+      </section>
+
+      <section id="securities" class="tab-panel" role="tabpanel" aria-labelledby="tab-securities" hidden>
+        <header class="workspace-header">
+          <div><h2>Securities</h2><p>Browse reported exposure, compare paired quarters, or inspect individual positions.</p></div>
+        </header>
+        <div class="workspace-tabs" role="tablist" aria-label="Choose a securities view">
+          <button id="tab-overview" class="active" type="button" role="tab" aria-selected="true" aria-controls="overview" data-mode="overview">Browse</button>
+          <button id="tab-netadds" type="button" role="tab" aria-selected="false" aria-controls="netadds" tabindex="-1" data-mode="netadds">Quarterly changes</button>
+          <button id="tab-holdings" type="button" role="tab" aria-selected="false" aria-controls="holdings" tabindex="-1" data-mode="holdings">Positions</button>
+        </div>
+
+      <section id="overview" class="security-mode-panel active" role="tabpanel" aria-labelledby="tab-overview">
+        <header class="view-header">
+          <div><h3>Browse</h3><p>Compare reported securities and instruments by value. Known tickers precede names; — means unavailable.</p></div>
+        </header>
+        <dl class="result-summary" aria-label="Filtered result summary">
+          <div><dt>13F reported value</dt><dd id="filteredValue">—</dd></div>
+          <div><dt>Positions</dt><dd id="filteredPositions">—</dd></div>
+          <div><dt>Managers</dt><dd id="filteredManagers">—</dd></div>
+          <div><dt>Securities</dt><dd id="filteredIssuers">—</dd></div>
+        </dl>
+        <div class="table-toolbar"><p id="breakdownTitle">Security totals</p><p id="breakdownSummary" aria-live="polite">Loading securities…</p></div>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Security totals table">
+          <table>
+            <caption class="sr-only">Security position totals matching the current filters</caption>
+            <thead><tr>
+              <th scope="col" class="identity-column" data-agg-sort="name" aria-sort="none"><button class="sort-button" type="button"><span id="aggregateNameLabel">Ticker / security</span> <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric" data-agg-sort="positions" aria-sort="none"><button class="sort-button" type="button">Positions <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric" data-agg-sort="managers" aria-sort="none"><button class="sort-button" type="button">Managers <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric active-sort" data-agg-sort="value" aria-sort="descending"><button class="sort-button" type="button">Reported value <i aria-hidden="true">↓</i></button></th>
+            </tr></thead>
+            <tbody id="breakdownBody"></tbody>
+          </table>
+        </div>
+        <nav class="pager" aria-label="Security totals table pages"><button id="prevAggregatePage" type="button">Previous</button><span id="aggregatePageInfo" aria-live="polite">Page 1</span><button id="nextAggregatePage" type="button">Next</button></nav>
+      </section>
+
+      <section id="netadds" class="security-mode-panel" role="tabpanel" aria-labelledby="tab-netadds" hidden>
+        <header class="view-header">
+          <div><h3>Quarterly changes</h3><p>Compare reported position changes across adjacent-quarter releases for managers with complete filings in both quarters.</p></div>
+        </header>
+        <p class="inline-caution"><strong>Not trade data:</strong> rankings use SH-unit rows; value changes include price movement, and unit changes can also reflect splits and corporate actions.</p>
+        <div class="view-controls net-controls">
+          <fieldset class="metric-switch wide-control"><legend>Measure quarterly change by</legend><label><input type="radio" name="netMetric" value="value" checked><span>Reported value change (includes price movement)</span></label><label><input type="radio" name="netMetric" value="portfolio"><span>Portfolio weight change</span></label><label><input type="radio" name="netMetric" value="position"><span>Change vs. prior value</span></label></fieldset>
+          <label><span>Position type</span><select id="netPosition"><option value="SHARES">Shares (SH units)</option><option value="PUT">Long puts (SH units)</option><option value="CALL">Long calls (SH units)</option></select></label>
+          <label class="wide-control"><span>Find ticker, stock, or CUSIP</span><input id="netSearch" type="search" autocomplete="off" placeholder="Filter the full ranking"></label>
+          <label><span>Minimum fund unit-change observations (all releases)</span><input id="netActivity" type="number" min="0" step="1" inputmode="numeric" value="0"></label>
+          <label><span>Minimum funds increasing units (latest)</span><input id="netMinAdding" type="number" min="0" step="1" inputmode="numeric" placeholder="No minimum"></label>
+          <label><span>Maximum funds increasing units (latest)</span><input id="netMaxAdding" type="number" min="0" step="1" inputmode="numeric" placeholder="No maximum"></label>
+          <label><span>Minimum funds decreasing units (latest)</span><input id="netMinCutting" type="number" min="0" step="1" inputmode="numeric" placeholder="No minimum"></label>
+          <label><span>Maximum funds decreasing units (latest)</span><input id="netMaxCutting" type="number" min="0" step="1" inputmode="numeric" placeholder="No maximum"></label>
+          <label><span>Minimum market cap ($)</span><input id="netMinMarketCap" type="number" min="0" step="1000000" inputmode="numeric" placeholder="No minimum"></label>
+          <label><span>Maximum market cap ($)</span><input id="netMaxMarketCap" type="number" min="0" step="1000000" inputmode="numeric" placeholder="No maximum"></label>
+          <button id="resetNet" type="button">Clear</button>
+        </div>
+        <div class="table-toolbar"><p id="netSummary" aria-live="polite">Loading quarterly changes…</p><p id="netDataNote">Complete filings in both quarters only.</p></div>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Quarterly changes ranking table">
+          <table>
+            <caption class="sr-only">Securities ranked by reported value change, aggregate portfolio-weight change, or change relative to prior reported value across paired 13F releases</caption>
+            <thead id="netHead"></thead>
+            <tbody id="netBody"></tbody>
+          </table>
+        </div>
+        <nav class="pager" aria-label="Quarterly changes table pages"><button id="prevNetPage" type="button">Previous</button><span id="netPageInfo" aria-live="polite">Page 1</span><button id="nextNetPage" type="button">Next</button></nav>
+        <details class="data-note"><summary>How quarterly changes and market cap are calculated</summary><p>Each release uses the paired cohort of managers with complete filings in both adjacent quarters. Security numerators and unit-change breadth use only rows reported with the SH amount type; PRN and other amount types remain available in Positions and detail views but are excluded from this ranking. Reported value change sums signed changes in end-quarter position value and includes price movement; it is not a trade or share-count measure. Portfolio weight change measures the percentage-point change in each ranked security's share of the cohort's full reported 13F portfolio, including PRN and other positions in the denominator. Change vs. prior value divides the release's value change by its prior reported position value; a zero prior position is unavailable, while a full exit is −100%. Multi-release change is a sum for the additive value and portfolio-weight modes, and a prior-value-weighted percentage for change vs. prior value. Zero-base releases are excluded from the latter; defined exits remain included. Trend sorting uses the latest defined release less the earliest defined release and requires two defined releases. Funds increasing and decreasing count managers whose reported units rose or fell in the latest release; their filters are inclusive. Market capitalization comes from a timestamped <a href="https://www.nasdaq.com/market-activity/stocks/screener" target="_blank" rel="noreferrer">Nasdaq Stock Screener</a> snapshot matched by ticker; it is current snapshot data, not historical quarter-end market cap. Unavailable market caps display as an em dash and remain browseable unless a market-cap bound is applied. These are reported-position changes, not confirmed trades.</p></details>
+      </section>
+
+      <section id="holdings" class="security-mode-panel" role="tabpanel" aria-labelledby="tab-holdings" hidden>
+        <header class="view-header"><div><h3>Positions</h3><p>Inspect every effective manager-quarter security position matching the dataset filters.</p></div></header>
+        <div class="table-toolbar"><p id="rowSummary" aria-live="polite">Loading positions…</p><p>All columns are sortable.</p></div>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Individual positions table">
+          <table>
+            <caption class="sr-only">Individual reported positions matching the current filters</caption>
+            <thead><tr>
+              <th scope="col" class="identity-column" data-sort="issuer" aria-sort="none"><button class="sort-button" type="button">Ticker / security <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-sort="class" aria-sort="none"><button class="sort-button" type="button">Class <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-sort="cusip" aria-sort="none"><button class="sort-button" type="button">CUSIP <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-sort="manager" aria-sort="none"><button class="sort-button" type="button">Fund / manager <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-sort="cik" aria-sort="none"><button class="sort-button" type="button">CIK <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-sort="period" aria-sort="none"><button class="sort-button" type="button">Period <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-sort="position" aria-sort="none"><button class="sort-button" type="button">Position <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric" data-sort="shares" aria-sort="none"><button class="sort-button" type="button">Units <i aria-hidden="true"></i></button></th>
+              <th scope="col" class="numeric active-sort" data-sort="value" aria-sort="descending"><button class="sort-button" type="button">Reported value <i aria-hidden="true">↓</i></button></th>
+              <th scope="col" data-sort="filing_date" aria-sort="none"><button class="sort-button" type="button">Filed <i aria-hidden="true"></i></button></th>
+              <th scope="col" data-sort="form" aria-sort="none"><button class="sort-button" type="button">Coverage / filing <i aria-hidden="true"></i></button></th>
+            </tr></thead>
+            <tbody id="holdingsBody"></tbody>
+          </table>
+        </div>
+        <nav class="pager" aria-label="Position table pages"><button id="prevPage" type="button">Previous</button><span id="pageInfo" aria-live="polite">Page 1</span><button id="nextPage" type="button">Next</button></nav>
+      </section>
+      </section>
+
+      <section id="detail" class="tab-panel" role="region" aria-labelledby="detailTitle" hidden>
+        <button id="detailBack" class="back-button" type="button">Back to previous view</button>
+        <header class="detail-header">
+          <div><p id="detailEyebrow" class="detail-type">Detail</p><h2 id="detailTitle" tabindex="-1">—</h2><p id="detailSubtitle">—</p></div>
+          <label class="local-filter"><span>Comparison quarter</span><select id="detailPeriod"></select></label>
+        </header>
+        <dl class="result-summary detail-summary" aria-label="Position change summary">
+          <div><dt>13F reported value</dt><dd id="detailValue">—</dd></div>
+          <div><dt id="detailAddedLabel">Added / new</dt><dd id="detailAdded">—</dd></div>
+          <div><dt id="detailReducedLabel">Reduced / exited</dt><dd id="detailReduced">—</dd></div>
+          <div><dt>Comparison</dt><dd id="detailComparison">—</dd></div>
+        </dl>
+        <section class="history-section" aria-labelledby="historyHeading">
+          <h3 id="historyHeading">Quarterly history</h3>
+          <div class="history-wrap"><table class="history-table"><caption id="detailHistoryCaption" class="sr-only">Quarterly reported value history</caption><thead><tr><th scope="col">Period</th><th scope="col" class="numeric">Reported value</th><th id="detailHistoryMetric" scope="col">Coverage / positions</th></tr></thead><tbody id="detailHistory"></tbody></table></div>
+        </section>
+        <div class="view-controls detail-controls">
+          <label class="wide-control"><span id="detailSearchLabel">Filter</span><input id="detailSearch" type="search" autocomplete="off" placeholder="Filter results"></label>
+          <label><span>Change</span><select id="detailChange"><option value="">All changes</option><option value="INCREASED">Increased</option><option value="REDUCED">Reduced</option><option value="NEW">New position</option><option value="EXITED">Exited</option><option value="UNCHANGED">Unchanged</option><option value="NOT_COMPARABLE">Not comparable</option></select></label>
+          <label><span>Position type</span><select id="detailPosition"><option value="">All positions</option><option value="0">Shares / other</option><option value="1">Put</option><option value="2">Call</option></select></label>
+        </div>
+        <div class="table-toolbar"><p id="detailSummary" aria-live="polite">Loading changes…</p><p>All columns are sortable.</p></div>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Quarter-over-quarter position changes table"><table><caption class="sr-only">Position changes for the selected fund or security</caption><thead id="detailHead"></thead><tbody id="detailBody"></tbody></table></div>
+        <nav class="pager" aria-label="Detail table pages"><button id="prevDetailPage" type="button">Previous</button><span id="detailPageInfo" aria-live="polite">Page 1</span><button id="nextDetailPage" type="button">Next</button></nav>
+        <details class="data-note"><summary>Comparison limitations</summary><p>Changes compare gross-long units reported at adjacent quarter ends. They are not confirmed trades. Splits, CUSIP changes, confidential treatment, partial filings, and reporting-manager changes can affect comparisons.</p></details>
+      </section>
+    </div>
+  </main>
+
+  <footer><p>Canonical SEC Form 13F snapshots. Reported-position changes are not confirmed transactions. Not investment advice.</p></footer>
+  <div id="errorToast" role="alert" aria-live="assertive" hidden><span id="errorMessage"></span><button id="dismissError" type="button">Dismiss</button></div>
+  <script src="app.js"></script>
+</body>
+</html>

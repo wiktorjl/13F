@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+artifacts/
+*_form13f.zip
+data/*.sqlite
+data/*.lock
+data/.*.lock
+data/company_tickers_exchange.json
+.env
