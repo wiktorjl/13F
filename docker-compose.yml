@@ -1,0 +1,43 @@
+# 13F Explorer behind Traefik at https://soto.wiktor.io/13f
+#
+# The container serves the app under BASE_PATH itself, so Traefik forwards the
+# request path unchanged and no stripprefix middleware is required.
+# The bind-mounted ./data must contain a database built elsewhere (see
+# "Deploying with Docker" in README.md) and be owned by uid/gid 1000:
+#   chown -R 1000:1000 data
+services:
+  13f:
+    build: .
+    image: 13f-explorer:latest
+    restart: unless-stopped
+    user: "1000:1000"            # must own ./data (chown -R 1000:1000 data)
+    environment:
+      BASE_PATH: /13f            # the app listens at /13f itself; no stripprefix needed
+      TRUST_DATABASE: "1"        # data/13f.sqlite was built elsewhere; archives are not shipped
+      # ARCHIVE_DIR: /app/archives   # with the archives mount below; then drop TRUST_DATABASE
+    volumes:
+      - ./data:/app/data
+      # - ./archives:/app/archives:ro   # only if the container should (re)build the database itself
+    expose: ["8080"]
+    networks: [proxy]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      # Host is the full subdomain: the app is published at soto.wiktor.io/13f,
+      # not at the apex wiktor.io.
+      - "traefik.http.routers.13f.rule=Host(`soto.wiktor.io`) && (Path(`/13f`) || PathPrefix(`/13f/`))"
+      - "traefik.http.routers.13f.entrypoints=websecure"
+      - "traefik.http.routers.13f.tls=true"
+      - "traefik.http.routers.13f.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.13f.priority=100"
+      - "traefik.http.routers.13f.service=13f"
+      - "traefik.http.services.13f.loadbalancer.server.port=8080"
+      # Not needed: the app serves /13f itself (BASE_PATH). If you prefer stripping, both labels
+      # below work too, because the server also accepts unprefixed paths — keep BASE_PATH so the
+      # HTML links stay correct.
+      # - "traefik.http.routers.13f.middlewares=13f-strip"
+      # - "traefik.http.middlewares.13f-strip.stripprefix.prefixes=/13f"
+
+networks:
+  proxy:
+    external: true

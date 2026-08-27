@@ -1,0 +1,235 @@
+:root {
+  color-scheme: light;
+  --bg: #F5F2EB;
+  --text: #2C2A26;
+  --positive: #5A7D5A;
+  --negative: #A65D57;
+  --accent: #8C7B6B;
+  --rule: #E0DCD5;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html { overflow-x: clip; background: var(--bg); }
+body {
+  margin: 0;
+  overflow-x: clip;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+a { color: inherit; }
+:where(a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dash-header,
+.dash-main {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* Header: logo left, plain-text view links after it */
+.dash-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.dash-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.dash-logo svg { display: block; width: 20px; height: 20px; }
+.dash-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  font-size: 14px;
+}
+
+.dash-nav a,
+.dash-toggle a,
+.dash-pager a,
+.dash-status a {
+  color: var(--accent);
+  text-decoration: none;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+}
+.dash-nav a:hover,
+.dash-toggle a:hover,
+.dash-pager a:hover,
+.dash-status a:hover,
+.dash-nav a:focus-visible,
+.dash-toggle a:focus-visible,
+.dash-pager a:focus-visible,
+.dash-status a:focus-visible { text-decoration: underline; }
+.dash-nav a.active,
+.dash-toggle a.active {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* Movers controls: Gainers | Losers left, 1Q 2Q 3Q 4Q right */
+.dash-controls {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 16px;
+  font-size: 14px;
+}
+.dash-toggle { display: flex; align-items: center; gap: 16px; }
+.dash-side { gap: 8px; }
+.dash-sep { color: var(--accent); }
+.dash-horizon { margin-left: auto; }
+
+/* Table: header and body columns share the table's auto layout, so labels sit over their values. Only
+   horizontal 1px rules; no vertical lines, no header background, no bold header text. The shared cell rules use
+   :where() so the per-column rules below and the narrow-screen block can override them by source order. */
+.dash-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+.dash-rows:focus { outline: none; }
+.dash-table tr { border-bottom: 1px solid var(--rule); }
+.dash-table :where(th, td) {
+  padding: 12px 0 12px 24px;
+  vertical-align: baseline;
+  text-align: left;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.dash-table :where(th, td):where(:first-child) { padding-left: 16px; }
+.dash-table :where(th, td):where(:last-child) { padding-right: 16px; }
+.dash-table th { font-size: 14px; color: var(--accent); }
+.dash-sort {
+  color: var(--accent);
+  text-decoration: none;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+}
+.dash-sort:hover,
+.dash-sort:focus-visible { text-decoration: underline; }
+.dash-sort.active {
+  color: var(--text);
+  text-decoration: underline;
+}
+/* The arrow is text that hangs into the 24px gutter after the label: a zero-width inline-block keeps it out of
+   the column's measured width (so the widest label, "Weight Change", still leaves the name column room) and out
+   of the underline run. */
+.dash-sort-glyph {
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+  white-space: pre;
+  font-size: 14px;
+}
+.dash-row a { color: inherit; text-decoration: none; }
+.dash-row a:hover,
+.dash-row a:focus-visible { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+
+.dash-table .dash-direction { font-size: 14px; text-align: center; }
+.dash-table .dash-direction.up { color: var(--positive); }
+.dash-table .dash-direction.down { color: var(--negative); }
+.dash-table .dash-direction.flat { color: var(--accent); }
+
+.dash-table td.dash-ticker {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.dash-table td.dash-ticker.dash-missing { color: var(--accent); font-weight: 400; }
+/* The name takes whatever width the fixed-content columns leave and ellipsises: width:100% claims the slack,
+   max-width:0 stops long names from widening the column. */
+.dash-table .dash-name {
+  width: 100%;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-table td.dash-name { font-size: 16px; }
+.dash-table .dash-metric,
+.dash-table .dash-price,
+.dash-table .dash-day,
+.dash-table .dash-ytd {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dash-table td.dash-metric { font-size: 16px; font-weight: 700; }
+.dash-table td.dash-price,
+.dash-table td.dash-day,
+.dash-table td.dash-ytd { font-size: 14px; }
+.dash-table td.dash-price { color: var(--accent); }
+.dash-table td.dash-day.positive, .dash-table td.dash-ytd.positive { color: var(--positive); }
+.dash-table td.dash-day.negative, .dash-table td.dash-ytd.negative { color: var(--negative); }
+.dash-table td.dash-day.neutral, .dash-table td.dash-ytd.neutral { color: var(--accent); }
+.dash-table td.dash-sector {
+  font-size: 14px;
+  color: var(--accent);
+  overflow: hidden;
+}
+
+/* Status line and pager */
+.dash-status {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 14px;
+  color: var(--accent);
+}
+.dash-status.error { color: var(--text); }
+.dash-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 16px;
+  font-size: 14px;
+}
+.dash-pager a.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+  cursor: default;
+}
+
+/* Narrow screens: two lines per row, never a horizontal page scroll. The table collapses to blocks and each
+   row becomes the two-line grid; the header row uses the same areas so labels sit where values sit. */
+@media (max-width: 639.98px) {
+  .dash-header { flex-wrap: wrap; gap: 12px 16px; }
+  .dash-nav { gap: 16px; }
+  .dash-table,
+  .dash-table thead,
+  .dash-table tbody { display: block; width: 100%; }
+  .dash-table tr {
+    display: grid;
+    grid-template-columns: 16px auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "dir ticker name metric metric"
+      "dir price day ytd sector";
+    column-gap: 16px;
+    row-gap: 4px;
+    align-items: baseline;
+    padding: 12px 16px;
+  }
+  .dash-table th,
+  .dash-table td { display: block; min-width: 0; padding: 0; }
+  .dash-sort-glyph { width: auto; }
+  .dash-table .dash-name { width: auto; max-width: none; }
+  .dash-table .dash-direction { grid-area: dir; align-self: start; }
+  .dash-table .dash-ticker { grid-area: ticker; }
+  .dash-table .dash-name { grid-area: name; }
+  .dash-table .dash-metric { grid-area: metric; }
+  .dash-table .dash-price { grid-area: price; }
+  .dash-table .dash-day { grid-area: day; text-align: left; }
+  .dash-table .dash-ytd { grid-area: ytd; }
+  .dash-table .dash-sector { grid-area: sector; }
+}

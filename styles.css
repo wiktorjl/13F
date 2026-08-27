@@ -71,6 +71,8 @@ a:hover { text-decoration-thickness: 2px; }
 .app-title h1 { margin: 0; font-size: 22px; line-height: 1.2; }
 .app-title p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
 .source-summary { text-align: right; }
+.app-title .source-summary { margin-left: auto; }
+.app-title .dashboard-link { flex: none; font-size: 13px; white-space: nowrap; }
 
 .dataset-summary {
   display: grid;

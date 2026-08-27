@@ -1,4 +1,4 @@
-.PHONY: verify verify-fast verify-ci test browser signals
+.PHONY: verify verify-fast verify-ci test browser signals docker-build docker-run
 
 signals:
 	python3 refresh_fund_signals.py
@@ -17,3 +17,9 @@ test:
 
 browser:
 	python3 tests/chromium_walkthrough.py --report artifacts/chromium-report.json
+
+docker-build:
+	docker compose build
+
+docker-run:
+	docker compose up -d --build

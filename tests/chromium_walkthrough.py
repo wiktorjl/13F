@@ -483,8 +483,11 @@ class UIWalkthrough:
                 "screenHeight": height,
             },
         )
+        # Always set touch state explicitly so a desktop check never inherits
+        # the phone input model from an earlier mobile step.
+        self.cdp.command("Emulation.setTouchEmulationEnabled",
+                         {"enabled": True, "maxTouchPoints": 1} if mobile else {"enabled": False})
         if mobile:
-            self.cdp.command("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1})
             # Reload the current route so responsive initialization is checked,
             # rather than only resizing the already-rendered desktop DOM.
             mark = len(self.cdp.responses)
@@ -574,6 +577,184 @@ class UIWalkthrough:
             self.viewport_failures.append(f"{name} viewport has horizontal overflow or clipped layout: {result}")
         if not result["tabsUsable"] or not result["errorHidden"]:
             self.viewport_failures.append(f"{name} viewport has unusable navigation or a visible error: {result}")
+
+    def dashboard_ready(self, view: str) -> None:
+        """Rows rendered for the view, its nav link active, and the status line (loading/error/empty) hidden."""
+        expression = f"""(() => {{
+          const active = document.querySelector('#dashNav a.active[data-view={json.dumps(view)}]');
+          const status = document.querySelector('#dashStatus');
+          return Boolean(active && active.getAttribute('aria-current') === 'page'
+            && document.querySelectorAll('#dashRows .dash-row').length > 0 && status && status.hidden
+            && document.title === '13F Dashboard — ' + active.textContent.trim());
+        }})()"""
+        self.cdp.wait_for(f"dashboard {view} rows", expression)
+
+    def dashboard_viewport_check(self, name: str, width: int, height: int, mobile: bool) -> None:
+        self.cdp.command(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False,
+             "screenWidth": width, "screenHeight": height},
+        )
+        self.cdp.command("Emulation.setTouchEmulationEnabled",
+                         {"enabled": True, "maxTouchPoints": 1} if mobile else {"enabled": False})
+        if mobile:
+            # Reload the current movers route so responsive initialization is
+            # checked, not only a resized desktop DOM.
+            mark = len(self.cdp.responses)
+            self.cdp.command("Page.reload", {"ignoreCache": True})
+            self.cdp.wait_for("dashboard mobile document readiness", "document.readyState === 'complete'")
+            self.cdp.wait_for_api("/api/dashboard", mark, {"view": "movers", "horizon": "2", "side": "losers"})
+            self.dashboard_ready("movers")
+        self.cdp.wait_for(f"dashboard {name} viewport width", f"window.innerWidth === {width}")
+        result = self.cdp.evaluate(
+            """(() => {
+              const originalX = window.scrollX;
+              window.scrollTo(1000000, window.scrollY);
+              const horizontalScrollReach = window.scrollX;
+              window.scrollTo(originalX, window.scrollY);
+              const describe = element => element.id ? `#${element.id}` : `${element.tagName.toLowerCase()}.${element.className}`;
+              const boxes = ['.dash-header', '#dashMain', '#dashControls', '#dashRows'].map(selector => {
+                const element = document.querySelector(selector);
+                if (!element || element.hidden) return {selector, skipped: true};
+                const rect = element.getBoundingClientRect();
+                return {selector, left: rect.left, right: rect.right, width: rect.width,
+                  fits: rect.left >= -1 && rect.right <= innerWidth + 1};
+              });
+              const overflowers = [...document.querySelectorAll('body *')].map(element => {
+                const rect = element.getBoundingClientRect();
+                return {element: describe(element), left: rect.left, right: rect.right, width: rect.width};
+              }).filter(item => item.left < -1 || item.right > innerWidth + 1).slice(0, 25);
+              return {
+                innerWidth, innerHeight,
+                documentWidth: document.documentElement.scrollWidth,
+                noPageOverflow: document.documentElement.scrollWidth <= innerWidth && horizontalScrollReach <= 1,
+                boxes,
+                boxesFit: boxes.every(box => box.skipped || box.fits),
+                overflowers,
+                rowCount: document.querySelectorAll('#dashRows .dash-row').length,
+                statusHidden: Boolean(document.querySelector('#dashStatus')?.hidden),
+                controlsVisible: document.querySelector('#dashControls')?.hidden === false,
+                activeElement: document.activeElement?.id || `${document.activeElement?.tagName}.${document.activeElement?.className}`,
+              };
+            })()"""
+        )
+        self.viewports[f"dashboard-{name}"] = result
+        if self.screenshot_dir is not None:
+            screenshot = self.screenshot_dir / f"dashboard-{name}.png"
+            self.cdp.screenshot(screenshot)
+            self.screenshots[f"dashboard-{name}"] = str(screenshot.resolve())
+        if result["innerWidth"] != width or not result["noPageOverflow"] or not result["boxesFit"]:
+            self.viewport_failures.append(f"dashboard {name} viewport has horizontal overflow or clipped layout: {result}")
+        if not result["rowCount"] or not result["statusHidden"] or not result["controlsVisible"]:
+            self.viewport_failures.append(f"dashboard {name} viewport has no rows, a visible status line, or hidden controls: {result}")
+
+    def dashboard_sorting(self) -> None:
+        """Column headers on Top Holdings: Ticker starts ascending, a second click flips it, and the metric
+        header returns to the default route (no sort parameters) with the metric column marked descending."""
+        cdp = self.cdp
+        tickers = ("[...document.querySelectorAll('#dashRows .dash-ticker')]"
+                   ".map(node => node.textContent.trim().toUpperCase()).filter(text => text && text !== '\u2014')")
+
+        def header_sort(column: str) -> str:
+            return f"document.querySelector('#dashHead th[data-sort=\"{column}\"]')?.getAttribute('aria-sort')"
+
+        def glyph(column: str) -> str:
+            return f"document.querySelector('#dashHead th[data-sort=\"{column}\"] a.dash-sort.active')?.textContent.trim().slice(-1)"
+
+        mark = len(cdp.responses)
+        cdp.click('#dashHead th[data-sort="ticker"] a')
+        cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "sort": "ticker", "direction": "asc", "page": "1"})
+        self.dashboard_ready("holdings")
+        cdp.wait_for("ticker header ascending", f"{header_sort('ticker')} === 'ascending' && {header_sort('metric')} === 'none' && {glyph('ticker')} === '\u2191'")
+        cdp.wait_for("tickers in ascending order", f"(() => {{ const t = {tickers}; return t.length >= 2 && t[0] <= t[1]; }})()")
+        cdp.wait_for("ticker ascending URL", "location.pathname === '/dashboard' && location.search === '?sort=ticker&direction=asc'")
+
+        mark = len(cdp.responses)
+        cdp.click('#dashHead th[data-sort="ticker"] a')
+        cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "sort": "ticker", "direction": "desc", "page": "1"})
+        self.dashboard_ready("holdings")
+        cdp.wait_for("ticker header descending", f"{header_sort('ticker')} === 'descending' && {glyph('ticker')} === '\u2193'")
+        cdp.wait_for("tickers in descending order", f"(() => {{ const t = {tickers}; return t.length >= 2 && t[0] >= t[1]; }})()")
+        cdp.wait_for("ticker descending URL", "location.pathname === '/dashboard' && location.search === '?sort=ticker'")
+
+        mark = len(cdp.responses)
+        cdp.click('#dashHead th[data-sort="metric"] a')
+        response = cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "page": "1", "size": "100"})
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(response["url"]).query)
+        if "sort" in query or "direction" in query:
+            raise WalkthroughFailure(f"Default metric sort must not send sort parameters: {response['url']}")
+        self.dashboard_ready("holdings")
+        cdp.wait_for("metric header descending", f"{header_sort('metric')} === 'descending' && {header_sort('ticker')} === 'none' && {glyph('metric')} === '\u2193'")
+        cdp.wait_for("holdings weight metrics after sort reset", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith('%'))")
+        cdp.wait_for("default holdings URL", "location.pathname === '/dashboard' && !location.search")
+
+    def dashboard_views(self) -> None:
+        """Holdings (with sorting and paging), Fresh Initiations, and Top Movers at 2Q/Losers, ending on the desktop check."""
+        cdp = self.cdp
+        # The explorer mobile check runs just before this; drop its touch
+        # emulation before navigating so the new document gets the desktop
+        # input model.
+        cdp.command("Emulation.setTouchEmulationEnabled", {"enabled": False})
+        cdp.command(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False,
+             "screenWidth": 1440, "screenHeight": 1000},
+        )
+        mark = len(cdp.responses)
+        cdp.command("Page.navigate", {"url": self.app_url + "dashboard"})
+        cdp.wait_for("dashboard document readiness", "document.readyState === 'complete'")
+        cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "page": "1", "size": "100"})
+        self.dashboard_ready("holdings")
+        cdp.wait_for("holdings weight metrics", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith('%'))")
+        # Securities without a ticker are hidden by default (unmapped=exclude), so the
+        # blank-ticker rendering path must not appear on the default holdings page.
+        cdp.wait_for("no unmapped rows by default", "document.querySelectorAll('#dashRows .dash-missing').length === 0")
+        cdp.wait_for("movers controls hidden", "document.querySelector('#dashControls')?.hidden === true")
+        self.dashboard_sorting()
+
+        # Paging is exercised whenever the list needs it (always on full production data).
+        if cdp.evaluate("document.querySelector('#dashPager')?.hidden === false") is True:
+            if cdp.evaluate("document.querySelector('#dashNext')?.getAttribute('aria-disabled') === 'true'") is True:
+                raise WalkthroughFailure("Dashboard pager is shown but Next is disabled on page 1")
+            mark = len(cdp.responses)
+            cdp.click("#dashNext")
+            cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "page": "2"})
+            self.dashboard_ready("holdings")
+            cdp.wait_for("dashboard page 2 URL", "location.pathname === '/dashboard' && new URLSearchParams(location.search).get('page') === '2'")
+            cdp.wait_for("dashboard page 2 focus", "document.activeElement?.id === 'dashRows'")
+            cdp.wait_for("Previous enabled on page 2", "document.querySelector('#dashPrev')?.getAttribute('aria-disabled') !== 'true'")
+
+        mark = len(cdp.responses)
+        cdp.click('#dashNav a[data-view="initiations"]')
+        cdp.wait_for_api("/api/dashboard", mark, {"view": "initiations", "page": "1"})
+        self.dashboard_ready("initiations")
+        cdp.wait_for("new-holder metrics", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith(' new'))")
+        cdp.wait_for("flat initiation directions", "[...document.querySelectorAll('#dashRows .dash-direction')].every(node => node.classList.contains('flat'))")
+        cdp.wait_for("initiations URL", "location.pathname === '/dashboard/initiations' && !location.search")
+
+        mark = len(cdp.responses)
+        cdp.click('#dashNav a[data-view="movers"]')
+        cdp.wait_for_api("/api/dashboard", mark, {"view": "movers", "horizon": "1", "side": "gainers", "page": "1"})
+        self.dashboard_ready("movers")
+        cdp.wait_for("movers controls", "document.querySelector('#dashControls')?.hidden === false")
+        cdp.wait_for("gainers default", "Boolean(document.querySelector('#dashSide a.active[data-side=\"gainers\"][aria-current=\"page\"]') && document.querySelector('#dashHorizon a.active[data-horizon=\"1\"][aria-current=\"page\"]'))")
+        cdp.wait_for("gainers direction", "document.querySelector('#dashRows .dash-direction')?.classList.contains('up')")
+
+        mark = len(cdp.responses)
+        cdp.click('#dashHorizon a[data-horizon="2"]')
+        cdp.wait_for_api("/api/dashboard", mark, {"view": "movers", "horizon": "2", "side": "gainers", "page": "1"})
+        self.dashboard_ready("movers")
+        cdp.wait_for("2Q timeframe active", "Boolean(document.querySelector('#dashHorizon a.active[data-horizon=\"2\"][aria-current=\"page\"]'))")
+
+        mark = len(cdp.responses)
+        cdp.click('#dashSide a[data-side="losers"]')
+        cdp.wait_for_api("/api/dashboard", mark, {"view": "movers", "horizon": "2", "side": "losers", "page": "1"})
+        self.dashboard_ready("movers")
+        cdp.wait_for("losers active", "Boolean(document.querySelector('#dashSide a.active[data-side=\"losers\"][aria-current=\"page\"]'))")
+        cdp.wait_for("losers direction", "document.querySelector('#dashRows .dash-direction')?.classList.contains('down')")
+        cdp.wait_for("movers metrics", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith('pp'))")
+        cdp.wait_for("movers URL", "location.pathname === '/dashboard/movers' && location.search === '?horizon=2&side=losers'")
+        self.dashboard_viewport_check("desktop", 1440, 1000, False)
 
     def run(self) -> None:
         cdp = self.cdp
@@ -710,6 +891,9 @@ class UIWalkthrough:
 
         self.step("Sort, page, and filter Positions", positions)
         self.step("Check the mobile viewport", lambda: self.viewport_check("mobile", 390, 844, True))
+
+        self.step("Browse the dashboard views", self.dashboard_views)
+        self.step("Check the dashboard mobile viewport", lambda: self.dashboard_viewport_check("mobile", 375, 812, True))
 
         cdp.evaluate("true")
         if cdp.console_failures or cdp.page_failures or cdp.network_failures or self.viewport_failures:

@@ -27,7 +27,8 @@ DEFAULT_DB = ROOT / "data" / "13f.sqlite"
 TICKER_MAP = ROOT / "data" / "cusip_tickers.json"
 MARKET_CAPS = ROOT / "data" / "market_caps.json"
 STARRED_FUNDS = ROOT / "data" / "starred_funds.json"
-SCHEMA_VERSION = "8"
+SECTORS = ROOT / "data" / "sectors.json"
+SCHEMA_VERSION = "9"
 
 SCHEMA = """
 PRAGMA journal_mode=OFF;
@@ -114,8 +115,61 @@ CREATE TABLE period_change_totals (
   current_period_id INTEGER PRIMARY KEY, previous_period_id INTEGER NOT NULL,
   current_value INTEGER NOT NULL, previous_value INTEGER NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE sectors (
+  ticker TEXT PRIMARY KEY COLLATE NOCASE,
+  sector TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT ''
+) WITHOUT ROWID;
+CREATE TABLE dashboard_period_stats (
+  period_id INTEGER PRIMARY KEY, previous_period_id INTEGER,
+  weight_manager_count INTEGER NOT NULL CHECK (weight_manager_count >= 0),
+  comparable_manager_count INTEGER NOT NULL CHECK (comparable_manager_count >= 0)
+) WITHOUT ROWID;
+CREATE TABLE security_weight_stats (
+  period_id INTEGER NOT NULL, security_id INTEGER NOT NULL,
+  holder_count INTEGER NOT NULL CHECK (holder_count > 0),
+  weight_sum REAL NOT NULL CHECK (weight_sum >= 0),
+  avg_weight REAL NOT NULL CHECK (avg_weight >= 0),
+  new_holder_count INTEGER NOT NULL CHECK (new_holder_count >= 0),
+  PRIMARY KEY (period_id, security_id)
+) WITHOUT ROWID;
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 """
+
+# Dashboard weight universe for one period: managers with a COMPLETE filing and
+# a positive reported total.  Manager weight = type-0 value / full reported
+# 13F total (options included); avg_weight is equal-weighted across the whole
+# universe (non-holders contribute 0) and stored in percent.
+DASHBOARD_WEIGHT_UNIVERSE_SQL = """SELECT mp.manager_id,s.total_value
+  FROM manager_periods mp JOIN manager_period_stats s
+    ON s.manager_id=mp.manager_id AND s.period_id=mp.period_id
+  WHERE mp.period_id=:q AND mp.coverage_status='COMPLETE' AND s.total_value>0"""
+DASHBOARD_WEIGHT_STATS_SQL = f"""WITH universe AS ({DASHBOARD_WEIGHT_UNIVERSE_SQL}),
+  w AS (
+    SELECT p.security_id,p.manager_id,sum(p.value)*1.0/u.total_value AS weight
+    FROM positions p JOIN universe u ON u.manager_id=p.manager_id
+    WHERE p.period_id=:q AND p.position_type=0 GROUP BY p.security_id,p.manager_id)
+  SELECT security_id,count(*) holder_count,sum(weight) weight_sum,
+    100.0*sum(weight)/:n avg_weight
+  FROM w GROUP BY security_id"""
+# Managers with COMPLETE filings on both sides of the adjacent pair; a manager
+# holds a security when it has any type-0 row for it (options never count).
+# The prior-quarter check is a NOT EXISTS probe on the positions primary key so
+# the plan stays index-backed even before ANALYZE has run (a materialized
+# LEFT JOIN degraded to an unindexed nested loop during the build).
+DASHBOARD_COMPARABLE_SQL = """SELECT a.manager_id FROM manager_periods a
+  JOIN manager_periods b ON b.manager_id=a.manager_id
+  WHERE a.period_id=:q AND b.period_id=:v
+    AND a.coverage_status='COMPLETE' AND b.coverage_status='COMPLETE'"""
+DASHBOARD_NEW_HOLDER_SQL = f"""WITH comparable AS ({DASHBOARD_COMPARABLE_SQL}),
+  cur AS (SELECT DISTINCT p.manager_id,p.security_id FROM positions p
+    JOIN comparable c ON c.manager_id=p.manager_id
+    WHERE p.period_id=:q AND p.position_type=0)
+  SELECT cur.security_id,count(*) new_holder_count FROM cur
+  WHERE NOT EXISTS (SELECT 1 FROM positions v
+    WHERE v.manager_id=cur.manager_id AND v.period_id=:v
+      AND v.security_id=cur.security_id AND v.position_type=0)
+  GROUP BY cur.security_id"""
 
 
 def date_iso(value: str) -> str:
@@ -208,6 +262,48 @@ def load_market_cap_snapshot(path: Path = MARKET_CAPS) -> dict:
         }
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         raise ValueError(f"Invalid market-cap snapshot: {path}") from exc
+
+
+def load_sector_snapshot(path: Path = SECTORS) -> dict:
+    if not path.exists():
+        return {"source": "", "source_page": "", "retrieved_at": "", "sectors": {}, "sha256": ""}
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw)
+        values = payload.get("sectors", {})
+        if not isinstance(values, dict):
+            raise ValueError("sectors must be an object")
+        sectors: dict[str, tuple[str, str]] = {}
+        for ticker, entry in values.items():
+            symbol = str(ticker).strip().upper()
+            if not symbol:
+                continue
+            if len(symbol) > 32 or any(ord(char) < 32 for char in symbol):
+                raise ValueError(f"invalid sector ticker: {ticker!r}")
+            if not isinstance(entry, dict):
+                raise ValueError(f"sector entry for {symbol} must be an object")
+
+            def text_field(key: str) -> str:
+                value = entry.get(key)
+                if value is None:
+                    return ""
+                if not isinstance(value, str):
+                    raise ValueError(f"sector entry {symbol}.{key} must be a string")
+                text = " ".join(value.split())
+                if any(ord(char) < 32 for char in text):
+                    raise ValueError(f"sector entry {symbol}.{key} contains control characters")
+                return text
+
+            sectors[symbol] = (text_field("sector"), text_field("name"))
+        return {
+            "source": str(payload.get("source", "")),
+            "source_page": str(payload.get("source_page", "")),
+            "retrieved_at": str(payload.get("retrieved_at", "")),
+            "sectors": sectors,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise ValueError(f"Invalid sector snapshot: {path}") from exc
 
 
 def load_starred_funds(path: Path = STARRED_FUNDS) -> dict:
@@ -389,7 +485,8 @@ def optional_file_sha256(path: Path) -> str:
 
 
 def assert_inputs_unchanged(archives: list[dict], ticker_map_sha256: str,
-                            market_cap_sha256: str, watchlist_sha256: str) -> None:
+                            market_cap_sha256: str, watchlist_sha256: str,
+                            sector_sha256: str) -> None:
     for archive in archives:
         if file_identity(archive["path"]) != archive["file_identity"]:
             raise ValueError(f"Source archive changed during build: {archive['path']}")
@@ -399,10 +496,62 @@ def assert_inputs_unchanged(archives: list[dict], ticker_map_sha256: str,
         (TICKER_MAP, ticker_map_sha256, "Ticker map"),
         (MARKET_CAPS, market_cap_sha256, "Market-cap snapshot"),
         (STARRED_FUNDS, watchlist_sha256, "Starred-fund watchlist"),
+        (SECTORS, sector_sha256, "Sector snapshot"),
     )
     for path, expected, label in snapshots:
         if optional_file_sha256(path) != expected:
             raise ValueError(f"{label} changed during build: {path}")
+
+
+def materialize_dashboard_stats(con: sqlite3.Connection) -> None:
+    """Rebuild the dashboard rollups (single implementation shared by builder, fixture, validator).
+
+    Assumes ``periods``, ``manager_periods``, ``manager_period_stats`` and
+    ``positions`` are populated.  Deletes and re-inserts ``dashboard_period_stats``
+    and ``security_weight_stats`` period by period, then ensures the two ranking
+    indexes exist.  A security whose only new holders have a zero reported total
+    has no weight row and is dropped from the new-holder update on purpose.
+    """
+    con.execute("DELETE FROM security_weight_stats")
+    con.execute("DELETE FROM dashboard_period_stats")
+    con.execute("DROP TABLE IF EXISTS temp.dashboard_new_holders")
+    con.execute("""CREATE TEMP TABLE dashboard_new_holders(
+      security_id INTEGER PRIMARY KEY, new_holder_count INTEGER NOT NULL) WITHOUT ROWID""")
+    previous_id: int | None = None
+    for (period_id,) in con.execute("SELECT id FROM periods ORDER BY period_date").fetchall():
+        universe_count = con.execute(
+            f"SELECT count(*) FROM ({DASHBOARD_WEIGHT_UNIVERSE_SQL})", {"q": period_id}
+        ).fetchone()[0]
+        comparable_count = 0 if previous_id is None else con.execute(
+            f"SELECT count(*) FROM ({DASHBOARD_COMPARABLE_SQL})", {"q": period_id, "v": previous_id}
+        ).fetchone()[0]
+        con.execute("INSERT INTO dashboard_period_stats VALUES (?,?,?,?)",
+                    (period_id, previous_id, universe_count, comparable_count))
+        if universe_count:
+            con.execute(
+                f"""INSERT INTO security_weight_stats
+                  (period_id,security_id,holder_count,weight_sum,avg_weight,new_holder_count)
+                  SELECT :q,security_id,holder_count,weight_sum,avg_weight,0
+                  FROM ({DASHBOARD_WEIGHT_STATS_SQL})""",
+                {"q": period_id, "n": universe_count},
+            )
+        if previous_id is not None:
+            con.execute("DELETE FROM dashboard_new_holders")
+            con.execute(f"INSERT INTO dashboard_new_holders {DASHBOARD_NEW_HOLDER_SQL}",
+                        {"q": period_id, "v": previous_id})
+            con.execute("""UPDATE security_weight_stats SET new_holder_count=(
+                SELECT n.new_holder_count FROM dashboard_new_holders n
+                WHERE n.security_id=security_weight_stats.security_id)
+              WHERE period_id=? AND security_id IN (SELECT security_id FROM dashboard_new_holders)""",
+                        (period_id,))
+        previous_id = period_id
+    con.execute("DROP TABLE IF EXISTS temp.dashboard_new_holders")
+    con.executescript("""
+      CREATE INDEX IF NOT EXISTS security_weight_stats_rank
+        ON security_weight_stats(period_id,avg_weight DESC);
+      CREATE INDEX IF NOT EXISTS security_weight_stats_new
+        ON security_weight_stats(period_id,new_holder_count DESC);
+    """)
 
 
 def validate_database(con: sqlite3.Connection, expected_period_count: int) -> None:
@@ -492,6 +641,46 @@ def validate_database(con: sqlite3.Connection, expected_period_count: int) -> No
             "SELECT coalesce(sum(total_value),0) FROM security_period_stats",
             con.execute("SELECT coalesce(sum(value),0) FROM positions").fetchone()[0],
         ),
+        "dashboard period stats row count": (
+            "SELECT count(*) FROM dashboard_period_stats", expected_period_count,
+        ),
+        "dashboard previous-period links": ("""WITH ordered AS (
+            SELECT id period_id,lag(id) OVER (ORDER BY period_date) previous_period_id FROM periods)
+          SELECT count(*) FROM ordered o LEFT JOIN dashboard_period_stats d ON d.period_id=o.period_id
+          WHERE d.period_id IS NULL OR d.previous_period_id IS NOT o.previous_period_id""", 0),
+        "dashboard weight-universe counts": ("""SELECT count(*) FROM dashboard_period_stats d
+          WHERE d.weight_manager_count!=(SELECT count(*) FROM manager_periods mp
+            JOIN manager_period_stats s ON s.manager_id=mp.manager_id AND s.period_id=mp.period_id
+            WHERE mp.period_id=d.period_id AND mp.coverage_status='COMPLETE' AND s.total_value>0)""", 0),
+        "dashboard comparable-manager counts": ("""SELECT count(*) FROM dashboard_period_stats d
+          WHERE d.comparable_manager_count!=coalesce((SELECT count(*) FROM manager_periods a
+            JOIN manager_periods b ON b.manager_id=a.manager_id AND b.period_id=d.previous_period_id
+            WHERE a.period_id=d.period_id AND a.coverage_status='COMPLETE'
+              AND b.coverage_status='COMPLETE'),0)""", 0),
+        "security weight stats row count": (
+            "SELECT count(*) FROM security_weight_stats",
+            con.execute("""SELECT count(*) FROM (
+              SELECT DISTINCT p.period_id,p.security_id FROM positions p
+              JOIN manager_periods mp ON mp.manager_id=p.manager_id AND mp.period_id=p.period_id
+              JOIN manager_period_stats s ON s.manager_id=p.manager_id AND s.period_id=p.period_id
+              WHERE p.position_type=0 AND mp.coverage_status='COMPLETE' AND s.total_value>0)""").fetchone()[0],
+        ),
+        "orphan dashboard period stats": ("""SELECT count(*) FROM dashboard_period_stats d
+          LEFT JOIN periods q ON q.id=d.period_id
+          LEFT JOIN periods v ON v.id=d.previous_period_id
+          WHERE q.id IS NULL OR (d.previous_period_id IS NOT NULL AND v.id IS NULL)""", 0),
+        "orphan security weight stats": ("""SELECT count(*) FROM security_weight_stats w
+          LEFT JOIN periods q ON q.id=w.period_id
+          LEFT JOIN securities sec ON sec.id=w.security_id
+          LEFT JOIN dashboard_period_stats d ON d.period_id=w.period_id
+          WHERE q.id IS NULL OR sec.id IS NULL OR d.period_id IS NULL""", 0),
+        "invalid dashboard statistics": ("""SELECT
+          (SELECT count(*) FROM dashboard_period_stats
+            WHERE weight_manager_count<0 OR comparable_manager_count<0)+
+          (SELECT count(*) FROM security_weight_stats
+            WHERE holder_count<=0 OR weight_sum<0 OR avg_weight<0 OR new_holder_count<0
+              OR weight_sum!=weight_sum OR avg_weight!=avg_weight)""", 0),
+        "empty sector tickers": ("SELECT count(*) FROM sectors WHERE ticker=''", 0),
     }
     failures = []
     for label, (sql, expected) in checks.items():
@@ -563,6 +752,37 @@ def validate_database(con: sqlite3.Connection, expected_period_count: int) -> No
     if change_total_mismatches:
         failures.append(f"period-change portfolio totals mismatches: found {change_total_mismatches}")
 
+    latest = con.execute("SELECT id FROM periods ORDER BY period_date DESC LIMIT 1").fetchone()
+    if latest is not None:
+        # Recompute the latest period's weights and new-holder counts from the
+        # positions themselves and require an exact match with the rollup.
+        latest_id = latest[0]
+        universe_count, previous_id = con.execute(
+            "SELECT weight_manager_count,previous_period_id FROM dashboard_period_stats WHERE period_id=?",
+            (latest_id,),
+        ).fetchone() or (0, None)
+        weight_mismatches = con.execute(f"""WITH actual AS ({DASHBOARD_WEIGHT_STATS_SQL})
+          SELECT count(*) FROM security_weight_stats s
+          LEFT JOIN actual a ON a.security_id=s.security_id
+          WHERE s.period_id=:q AND (a.security_id IS NULL OR a.holder_count!=s.holder_count
+            OR abs(a.weight_sum-s.weight_sum)>=1e-9 OR abs(a.avg_weight-s.avg_weight)>=1e-9)""",
+                                        {"q": latest_id, "n": max(universe_count, 1)}).fetchone()[0]
+        if weight_mismatches:
+            failures.append(f"latest-period security weight mismatches: found {weight_mismatches}")
+        if previous_id is None:
+            new_holder_mismatches = con.execute(
+                "SELECT count(*) FROM security_weight_stats WHERE period_id=? AND new_holder_count!=0",
+                (latest_id,),
+            ).fetchone()[0]
+        else:
+            new_holder_mismatches = con.execute(f"""WITH actual AS ({DASHBOARD_NEW_HOLDER_SQL})
+              SELECT count(*) FROM security_weight_stats s
+              LEFT JOIN actual a ON a.security_id=s.security_id
+              WHERE s.period_id=:q AND s.new_holder_count!=coalesce(a.new_holder_count,0)""",
+                                                {"q": latest_id, "v": previous_id}).fetchone()[0]
+        if new_holder_mismatches:
+            failures.append(f"latest-period new-holder mismatches: found {new_holder_mismatches}")
+
     schema_version = con.execute(
         "SELECT value FROM metadata WHERE key='schema_version'"
     ).fetchone()
@@ -599,10 +819,15 @@ def populate_database(sources: list[Path], con: sqlite3.Connection) -> int:
     ticker_map, ticker_map_sha256 = load_ticker_map_snapshot()
     market_cap_snapshot = load_market_cap_snapshot()
     starred_funds = load_starred_funds()
+    sector_snapshot = load_sector_snapshot()
     con.executescript(SCHEMA)
     con.executemany(
         "INSERT INTO market_caps(ticker,market_cap) VALUES (?,?)",
         market_cap_snapshot["market_caps"].items(),
+    )
+    con.executemany(
+        "INSERT INTO sectors(ticker,sector,name) VALUES (?,?,?)",
+        ((ticker, sector, name) for ticker, (sector, name) in sector_snapshot["sectors"].items()),
     )
     for label in ordered_periods:
         con.execute("INSERT INTO periods VALUES (?,?,?,?)",
@@ -818,6 +1043,9 @@ def populate_database(sources: list[Path], con: sqlite3.Connection) -> int:
               ON c.manager_id=p.manager_id WHERE p.period_id=?),0)""",
           (current_id, previous_id, current_id, previous_id, current_id, previous_id))
         con.commit()
+    print("Materializing dashboard portfolio-weight statistics…", flush=True)
+    materialize_dashboard_stats(con)
+    con.commit()
     con.executescript("""
       CREATE INDEX stock_changes_rank ON stock_changes(current_period_id,position_type,net_add DESC);
       CREATE INDEX stock_changes_value ON stock_changes(current_period_id,position_type,current_value DESC);
@@ -847,6 +1075,10 @@ def populate_database(sources: list[Path], con: sqlite3.Connection) -> int:
                     (f"market_cap_{key}", market_cap_snapshot[key]))
     con.execute("INSERT INTO metadata VALUES ('market_cap_count',?)",
                 (str(len(market_cap_snapshot["market_caps"])),))
+    for key in ("source", "source_page", "retrieved_at", "sha256"):
+        con.execute("INSERT INTO metadata VALUES (?,?)", (f"sector_{key}", sector_snapshot[key]))
+    con.execute("INSERT INTO metadata VALUES ('sector_count',?)",
+                (str(len(sector_snapshot["sectors"])),))
     con.execute("INSERT INTO metadata VALUES ('fund_watchlist_name',?)", (starred_funds["name"],))
     con.execute("INSERT INTO metadata VALUES ('fund_watchlist_selected_at',?)", (starred_funds["selected_at"],))
     con.execute("INSERT INTO metadata VALUES ('fund_watchlist_methodology',?)", (starred_funds["methodology"],))
@@ -889,7 +1121,7 @@ def populate_database(sources: list[Path], con: sqlite3.Connection) -> int:
     con.commit()
     validate_database(con, len(ordered_periods))
     assert_inputs_unchanged(archives, ticker_map_sha256, market_cap_snapshot["sha256"],
-                            starred_funds["sha256"])
+                            starred_funds["sha256"], sector_snapshot["sha256"])
     return len(archives)
 
 
@@ -917,7 +1149,8 @@ def build(sources: list[Path], destination: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", action="append", type=Path, help="ZIP archive (repeatable)")
-    parser.add_argument("--source-dir", type=Path, default=ROOT)
+    parser.add_argument("--source-dir", type=Path, default=Path(os.environ.get("ARCHIVE_DIR") or ROOT),
+                        help="Directory holding *_form13f.zip (default: $ARCHIVE_DIR, else the repository root)")
     parser.add_argument("--output", type=Path, default=DEFAULT_DB)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()

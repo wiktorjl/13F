@@ -33,6 +33,13 @@ SECURITIES = (
     (4, "88160R101", "TESLA INC", "COM", "", "TSLA"),
 )
 
+SECTORS = (
+    ("AAPL", "Technology", "Apple Inc."),
+    ("MSFT", "Technology", "Microsoft Corporation"),
+    ("NVDA", "Technology", "NVIDIA Corporation"),
+    ("TSLA", "Consumer Discretionary", "Tesla, Inc."),
+)
+
 # manager, period, security, position type, unit type, reported value, units
 POSITIONS = (
     (1, 1, 1, 0, 0, 1_000, 100.0),
@@ -172,9 +179,12 @@ def create_fixture_database(path: Path) -> Path:
             (("AAPL", 3_100_000_000_000), ("MSFT", 2_900_000_000_000),
              ("NVDA", 3_000_000_000_000), ("TSLA", 900_000_000_000)),
         )
+        con.executemany("INSERT INTO sectors VALUES (?,?,?)", SECTORS)
         _insert_manager_periods(con)
         con.executemany("INSERT INTO positions VALUES (?,?,?,?,?,?,?)", POSITIONS)
         _insert_statistics(con)
+        # Dashboard rollups come from the builder's shared materializer, never by hand.
+        build_database.materialize_dashboard_stats(con)
         _insert_changes(con)
         metadata = {
             "schema_version": build_database.SCHEMA_VERSION,
@@ -192,6 +202,10 @@ def create_fixture_database(path: Path) -> Path:
             "fund_watchlist_sha256": "",
             "market_cap_source": "Fixture market caps",
             "market_cap_retrieved_at": "2026-01-15T00:00:00+00:00",
+            "sector_sha256": "",
+            "sector_source": "Fixture sectors",
+            "sector_retrieved_at": "2026-01-15T00:00:00+00:00",
+            "sector_count": str(len(SECTORS)),
         }
         con.executemany("INSERT INTO metadata(key,value) VALUES (?,?)", metadata.items())
         con.commit()

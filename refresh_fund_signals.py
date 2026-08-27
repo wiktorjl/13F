@@ -41,8 +41,11 @@ SOURCE_NAME = "Nasdaq Historical Quotes"
 SOURCE_PAGE = "https://www.nasdaq.com/market-activity/quotes/historical"
 SOURCE_TEMPLATE = (
     "https://api.nasdaq.com/api/quote/{symbol}/historical"
-    "?assetclass=stocks&fromdate={from_date}&todate={to_date}&limit=5000"
+    "?assetclass={assetclass}&fromdate={from_date}&todate={to_date}&limit=5000"
 )
+# Nasdaq's history route answers "Symbol not exists." for ETFs under
+# assetclass=stocks, so every symbol is tried as a stock first, then as an ETF.
+ASSET_CLASSES = ("stocks", "etf")
 METRIC_VERSION = "post_disclosure_signal_v1"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MIN_PRICE_SYMBOLS = 250
@@ -183,28 +186,50 @@ def read_limited(response, limit: int = MAX_RESPONSE_BYTES) -> bytes:
     return payload
 
 
-def fetch_history(ticker: str, from_date: str, to_date: str, retries: int = 3) -> list[tuple[str, float]]:
+def history_urls(ticker: str, from_date: str, to_date: str) -> list[str]:
+    """Candidate Nasdaq history URLs for one window: the stock route, then the ETF route."""
     symbol = nasdaq_symbol(ticker)
     if not re.fullmatch(r"[A-Z0-9.\-^]{1,32}", symbol):
         raise ValueError("Unsupported Nasdaq symbol")
-    url = SOURCE_TEMPLATE.format(
-        symbol=quote(symbol, safe=""), from_date=from_date, to_date=to_date
+    return [
+        SOURCE_TEMPLATE.format(
+            symbol=quote(symbol, safe=""), assetclass=asset_class,
+            from_date=from_date, to_date=to_date,
+        )
+        for asset_class in ASSET_CLASSES
+    ]
+
+
+def fetch_history_payload(url: str) -> dict:
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": "Mozilla/5.0 (compatible; 13F-Explorer/1.0)",
+        },
     )
+    with urlopen(request, timeout=45) as response:
+        payload = json.loads(read_limited(response).decode("utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def fetch_history(ticker: str, from_date: str, to_date: str, retries: int = 3) -> list[tuple[str, float]]:
+    urls = history_urls(ticker, from_date, to_date)
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            request = Request(
-                url,
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "User-Agent": "Mozilla/5.0 (compatible; 13F-Explorer/1.0)",
-                },
-            )
-            with urlopen(request, timeout=45) as response:
-                payload = json.loads(read_limited(response).decode("utf-8"))
-            if payload.get("status", {}).get("rCode") != 200:
+            payload: dict | None = None
+            for url in urls:
+                # A non-success status (e.g. "Symbol not exists." under
+                # assetclass=stocks) falls through to the next asset class;
+                # network and shape failures propagate to the retry loop.
+                candidate = fetch_history_payload(url)
+                if candidate.get("status", {}).get("rCode") == 200:
+                    payload = candidate
+                    break
+            if payload is None:
                 raise ValueError("Nasdaq returned a non-success status")
-            rows = payload.get("data", {}).get("tradesTable", {}).get("rows") or []
+            rows = ((payload.get("data") or {}).get("tradesTable") or {}).get("rows") or []
             parsed: dict[str, float] = {}
             for row in rows:
                 if not isinstance(row, dict):
@@ -248,7 +273,14 @@ def main_metadata(con: sqlite3.Connection) -> dict[str, str]:
     return dict(con.execute("SELECT key,value FROM metadata"))
 
 
-def price_targets(con: sqlite3.Connection, trusted: dict[str, str]) -> tuple[set[str], str]:
+def price_targets(con: sqlite3.Connection, trusted: dict[str, str]) -> tuple[set[str], str, int]:
+    """Symbols to price: trusted tickers with SH positions plus every displayed ticker.
+
+    Scores still use only the trusted tier; the display tier (any non-blank
+    ``securities.ticker``, including sec_name mappings) is priced so the
+    dashboard can quote those rows.  Returns (symbols, earliest period date,
+    display-tier symbol count).
+    """
     con.execute("CREATE TEMP TABLE trusted_map(cusip TEXT PRIMARY KEY,ticker TEXT NOT NULL) WITHOUT ROWID")
     con.executemany("INSERT INTO trusted_map VALUES (?,?)", trusted.items())
     symbols = {
@@ -259,17 +291,22 @@ def price_targets(con: sqlite3.Connection, trusted: dict[str, str]) -> tuple[set
             WHERE p.position_type=0 AND p.shares_type=0 AND p.shares IS NOT NULL"""
         )
     }
+    display = {
+        row[0].strip().upper()
+        for row in con.execute("SELECT DISTINCT ticker FROM securities WHERE ticker!=''")
+        if row[0].strip()
+    }
     earliest = con.execute("SELECT min(period_date) FROM periods").fetchone()[0]
     if not earliest:
         raise ValueError("No reporting periods are available")
-    return symbols, earliest
+    return symbols | display, earliest, len(display)
 
 
 def refresh_prices(
     main_db: Path, price_db: Path, trusted: dict[str, str], workers: int
 ) -> tuple[str, int, int]:
     with closing(sqlite3.connect(f"file:{main_db}?mode=ro", uri=True)) as source:
-        symbols, earliest = price_targets(source, trusted)
+        symbols, earliest, display_count = price_targets(source, trusted)
     if not symbols:
         raise ValueError("No trusted priced symbols were found")
 
@@ -290,7 +327,8 @@ def refresh_prices(
             failures: list[str] = []
             completed = 0
             print(
-                f"Refreshing {len(symbols):,} trusted symbols from {earliest} through {mark_date}…",
+                f"Refreshing {len(symbols):,} symbols ({display_count:,} display-tier) "
+                f"from {earliest} through {mark_date}…",
                 flush=True,
             )
             with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -337,6 +375,7 @@ def refresh_prices(
                 "from_date": earliest,
                 "mark_date": mark_date,
                 "requested_symbol_count": str(len(symbols)),
+                "display_symbol_count": str(display_count),
                 "mark_symbol_count": str(exact_mark),
                 "failed_symbol_count": str(len(failures)),
                 "failed_symbols": json.dumps(failures[:200], separators=(",", ":")),

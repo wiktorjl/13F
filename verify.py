@@ -25,6 +25,12 @@ from tests.chromium_walkthrough import run_walkthrough
 from tests.support import create_fixture_database, http_request, running_server
 
 ROOT = Path(__file__).resolve().parent
+JAVASCRIPT_FILES = ("app.js", "dashboard.js")
+# The dashboard DOM contract: tests/chromium_walkthrough.py and dashboard.js both key on these.
+DASHBOARD_IDS = frozenset({
+    "dashLogo", "dashNav", "dashMain", "dashControls", "dashSide", "dashHorizon",
+    "dashTable", "dashHead", "dashRows", "dashStatus", "dashPager", "dashPrev", "dashNext",
+})
 
 
 class VerificationFailure(RuntimeError):
@@ -38,6 +44,8 @@ class DocumentAudit(HTMLParser):
         self.scripts: list[str] = []
         self.stylesheets: list[str] = []
         self.inline_scripts = 0
+        self.inline_styles = 0
+        self.preloads: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
@@ -48,9 +56,44 @@ class DocumentAudit(HTMLParser):
                 self.scripts.append(str(values["src"]))
             else:
                 self.inline_scripts += 1
-        if tag == "link" and "stylesheet" in str(values.get("rel", "")).split():
+        # <style> blocks, style="..." and on*="..." attributes all need
+        # 'unsafe-inline', which the CSP deliberately does not grant.
+        if tag == "style" or any(name == "style" or name.startswith("on") for name, _ in attrs):
+            self.inline_styles += 1
+        rel = set(str(values.get("rel", "")).split())
+        if tag == "link" and "stylesheet" in rel:
             if values.get("href"):
                 self.stylesheets.append(str(values["href"]))
+        if tag == "link" and rel & {"preload", "modulepreload"}:
+            self.preloads.append(str(values.get("href") or ""))
+
+
+def audit_document(name: str, *, scripts: list[str], stylesheets: list[str],
+                   required_ids: frozenset[str] = frozenset()) -> DocumentAudit:
+    """Reject inline scripts/styles/handlers, duplicate IDs, and any asset outside the static allowlist."""
+    audit = DocumentAudit()
+    audit.feed((ROOT / name).read_text(encoding="utf-8"))
+    duplicates = sorted(identifier for identifier in set(audit.ids) if audit.ids.count(identifier) > 1)
+    if duplicates:
+        raise VerificationFailure(f"{name} contains duplicate IDs: {duplicates}")
+    if audit.inline_scripts:
+        raise VerificationFailure(f"{name} contains inline script that violates the static CSP")
+    if audit.inline_styles:
+        raise VerificationFailure(f"{name} contains inline style or event-handler attributes that violate the static CSP")
+    if audit.preloads:
+        raise VerificationFailure(f"{name} contains preload links outside the static allowlist: {audit.preloads}")
+    # Root-absolute references ("/dashboard.js") are how the dashboard sub-paths
+    # such as /dashboard/movers reach the same allowlisted assets. Tolerate exactly
+    # one leading slash: "//dashboard.js" is a protocol-relative external host.
+    if ([src.removeprefix("/") for src in audit.scripts] != scripts
+            or [href.removeprefix("/") for href in audit.stylesheets] != stylesheets):
+        raise VerificationFailure(
+            f"Unexpected local assets in {name}: scripts={audit.scripts}, styles={audit.stylesheets}"
+        )
+    missing = sorted(required_ids.difference(audit.ids))
+    if missing:
+        raise VerificationFailure(f"{name} is missing required IDs: {missing}")
+    return audit
 
 
 def syntax_checks() -> dict[str, Any]:
@@ -60,29 +103,23 @@ def syntax_checks() -> dict[str, Any]:
 
     node = shutil.which("node")
     if not node:
-        raise VerificationFailure("Node.js is required for the deterministic app.js syntax check")
-    result = subprocess.run(
-        [node, "--check", str(ROOT / "app.js")],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    if result.returncode:
-        raise VerificationFailure(f"app.js syntax check failed:\n{result.stdout}")
-
-    audit = DocumentAudit()
-    audit.feed((ROOT / "index.html").read_text(encoding="utf-8"))
-    duplicates = sorted(identifier for identifier in set(audit.ids) if audit.ids.count(identifier) > 1)
-    if duplicates:
-        raise VerificationFailure(f"index.html contains duplicate IDs: {duplicates}")
-    if audit.inline_scripts:
-        raise VerificationFailure("index.html contains inline script that violates the static CSP")
-    if audit.scripts != ["app.js"] or audit.stylesheets != ["styles.css"]:
-        raise VerificationFailure(
-            f"Unexpected local assets in index.html: scripts={audit.scripts}, styles={audit.stylesheets}"
+        raise VerificationFailure("Node.js is required for the deterministic JavaScript syntax check")
+    for name in JAVASCRIPT_FILES:
+        result = subprocess.run(
+            [node, "--check", str(ROOT / name)],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
         )
-    return {"python_files": len(python_files), "javascript": "node --check", "html_ids": len(audit.ids)}
+        if result.returncode:
+            raise VerificationFailure(f"{name} syntax check failed:\n{result.stdout}")
+
+    explorer = audit_document("index.html", scripts=["app.js"], stylesheets=["styles.css"])
+    dashboard = audit_document("dashboard.html", scripts=["dashboard.js"], stylesheets=["dashboard.css"],
+                               required_ids=DASHBOARD_IDS)
+    return {"python_files": len(python_files), "javascript": "node --check " + " ".join(JAVASCRIPT_FILES),
+            "html_ids": len(explorer.ids), "dashboard_ids": len(dashboard.ids)}
 
 
 def run_unittests() -> None:
@@ -207,6 +244,11 @@ def api_smoke_and_performance(
         "stock-detail": ("/api/stock-detail?" + urlencode({"cusip": cusip, "period": latest, "page": 1, "size": 10}), {"security", "rows", "summary"}),
         "fund-detail": ("/api/fund-detail?" + urlencode({"cik": cik, "period": latest, "page": 1, "size": 10}), {"manager", "rows", "summary"}),
         "net-adds": ("/api/net-adds?" + urlencode({"metric": "value", "position": "SHARES", "page": 1, "size": 10}), {"periods", "rows", "count"}),
+        "dashboard": ("/api/dashboard?" + urlencode({"view": "movers", "horizon": 1, "side": "gainers", "page": 1, "size": 10}), {"rows", "count", "view"}),
+        "dashboard-holdings": ("/api/dashboard?" + urlencode({"view": "holdings", "page": 1, "size": 10}), {"rows", "count", "view"}),
+        "dashboard-initiations": ("/api/dashboard?" + urlencode({"view": "initiations", "page": 1, "size": 10}), {"rows", "count", "view"}),
+        # A price sort joins prices.bars for the whole holdings universe; keep it inside the budget.
+        "dashboard-price-sort": ("/api/dashboard?" + urlencode({"view": "holdings", "sort": "price", "direction": "asc", "page": 1, "size": 10}), {"rows", "count", "sort", "direction"}),
     }
     measurements: dict[str, dict[str, float]] = {}
     with running_server(database) as address:
@@ -287,12 +329,19 @@ def main() -> int:
             with tempfile.TemporaryDirectory(prefix="13f-verify-") as directory:
                 fixture = create_fixture_database(Path(directory) / "fixture.sqlite")
                 run_step("fixture quick_check and invariants", lambda: check_database(fixture, require_fresh=False))
-                run_step(
-                    "fixture API smoke and performance",
-                    lambda: api_smoke_and_performance(
-                        fixture, repetitions=2, budget_seconds=min(args.api_budget, 5.0)
-                    ),
-                )
+                # The fast path never reads production caches: point the price
+                # cache at an absent file so the dashboard degrades to "unpriced".
+                original_price_cache = server.PRICE_CACHE
+                server.PRICE_CACHE = Path(directory) / "prices.sqlite"
+                try:
+                    run_step(
+                        "fixture API smoke and performance",
+                        lambda: api_smoke_and_performance(
+                            fixture, repetitions=2, budget_seconds=min(args.api_budget, 5.0)
+                        ),
+                    )
+                finally:
+                    server.PRICE_CACHE = original_price_cache
             print("\nFAST VERIFICATION PASSED (production database and Chromium intentionally not used)")
             return 0
 

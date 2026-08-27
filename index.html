@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>13F Explorer</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231f4f46'/%3E%3Cpath d='M15 43h34M19 36l8-9 8 6 11-14' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to data</a>
@@ -17,6 +17,7 @@
         <p>Research delayed quarter-end 13F snapshots. Filings can arrive up to 45 days later.</p>
       </div>
       <p id="sourceSummary" class="source-summary">Loading dataset…</p>
+      <a class="dashboard-link" href="/dashboard">Dashboard</a>
     </div>
     <dl class="dataset-summary" aria-label="Dataset summary">
       <div><dt>Dataset span</dt><dd id="statPeriod">—</dd></div>
@@ -232,6 +233,6 @@
 
   <footer><p>Canonical SEC Form 13F snapshots. Reported-position changes are not confirmed transactions. Not investment advice.</p></footer>
   <div id="errorToast" role="alert" aria-live="assertive" hidden><span id="errorMessage"></span><button id="dismissError" type="button">Dismiss</button></div>
-  <script src="app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

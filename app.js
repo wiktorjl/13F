@@ -1,3 +1,6 @@
+// Public prefix the app is served under (e.g. "/13f" behind a reverse proxy): derived from this script's own
+// URL so one build works at any mount point. History URLs are relative queries and need no prefix.
+const BASE_PATH = new URL(document.currentScript?.src ?? '/', location.href).pathname.replace(/\/[^/]*$/, '');
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -109,7 +112,7 @@ const POSITION_CLASSES = new Map([['PUT', 'put'], ['CALL', 'call']]);
 async function api(path, params = new URLSearchParams()) {
   let response;
   try {
-    response = await fetch(path + (params.size ? `?${params}` : ''));
+    response = await fetch(BASE_PATH + path + (params.size ? `?${params}` : ''));
   } catch (_) {
     throw new Error('Could not reach the data service. Check your connection and try again.');
   }

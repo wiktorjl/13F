@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>13F Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%232C2A26'/%3E%3Cpath d='M7 17v-5M12 17V7M17 17v-3' fill='none' stroke='%238C7B6B' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <header class="dash-header">
+    <a id="dashLogo" class="dash-logo" href="/dashboard" aria-label="13F Dashboard"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><rect width="24" height="24" rx="5" fill="#2C2A26"/><path d="M7 17v-5M12 17V7M17 17v-3" fill="none" stroke="#8C7B6B" stroke-width="2.4" stroke-linecap="round"/></svg><span>13F</span></a>
+    <nav id="dashNav" class="dash-nav" aria-label="Views">
+      <a href="/dashboard" data-view="holdings">Top Holdings</a>
+      <a href="/dashboard/initiations" data-view="initiations">Fresh Initiations</a>
+      <a href="/dashboard/movers" data-view="movers">Top Movers</a>
+    </nav>
+  </header>
+  <main id="dashMain" class="dash-main">
+    <div id="dashControls" class="dash-controls" hidden>
+      <nav id="dashSide" class="dash-toggle dash-side" aria-label="Movers">
+        <a href="/dashboard/movers?side=gainers" data-side="gainers">Gainers</a><span class="dash-sep" aria-hidden="true">|</span><a href="/dashboard/movers?side=losers" data-side="losers">Losers</a>
+      </nav>
+      <nav id="dashHorizon" class="dash-toggle dash-horizon" aria-label="Timeframe">
+        <a href="/dashboard/movers?horizon=1" data-horizon="1">1Q</a>
+        <a href="/dashboard/movers?horizon=2" data-horizon="2">2Q</a>
+        <a href="/dashboard/movers?horizon=3" data-horizon="3">3Q</a>
+        <a href="/dashboard/movers?horizon=4" data-horizon="4">4Q</a>
+      </nav>
+    </div>
+    <table id="dashTable" class="dash-table" aria-label="Stocks">
+      <thead>
+        <tr id="dashHead" class="dash-head">
+          <th scope="col" class="dash-direction" aria-label="Direction"></th>
+          <th scope="col" class="dash-ticker" data-sort="ticker" aria-sort="none"><a href="/dashboard?sort=ticker&amp;direction=asc" class="dash-sort">Ticker</a></th>
+          <th scope="col" class="dash-name" data-sort="name" aria-sort="none"><a href="/dashboard?sort=name&amp;direction=asc" class="dash-sort">Name</a></th>
+          <th scope="col" class="dash-metric" data-sort="metric" aria-sort="descending"><a href="/dashboard" class="dash-sort active">Avg Weight</a></th>
+          <th scope="col" class="dash-price" data-sort="price" aria-sort="none"><a href="/dashboard?sort=price" class="dash-sort">Price</a></th>
+          <th scope="col" class="dash-day" data-sort="day" aria-sort="none"><a href="/dashboard?sort=day" class="dash-sort">Day</a></th>
+          <th scope="col" class="dash-ytd" data-sort="ytd" aria-sort="none"><a href="/dashboard?sort=ytd" class="dash-sort">YTD</a></th>
+          <th scope="col" class="dash-sector" data-sort="sector" aria-sort="none"><a href="/dashboard?sort=sector&amp;direction=asc" class="dash-sort">Sector</a></th>
+        </tr>
+      </thead>
+      <tbody id="dashRows" class="dash-rows"></tbody>
+    </table>
+    <p id="dashStatus" class="dash-status" aria-live="polite" hidden></p>
+    <nav id="dashPager" class="dash-pager" aria-label="Pages" hidden>
+      <a id="dashPrev" href="#" rel="prev">Previous</a><a id="dashNext" href="#" rel="next">Next</a>
+    </nav>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>
