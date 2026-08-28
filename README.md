@@ -107,7 +107,7 @@ Build on a machine that has the archives, then ship the `data/` directory (about
 
 - `13f.sqlite` — the main database from `python3 build_database.py --force`. Required.
 - `cusip_tickers.json`, `market_caps.json`, `sectors.json`, `starred_funds.json` — the build inputs. Keep them next to the database so a `make signals` or a rebuild inside the container sees the same mappings; `starred_funds.json` is bundled, the others come from `enrich_tickers.py` and `refresh_market_caps.py`.
-- `prices.sqlite` — from `make signals`. Optional: without it every price field is `—`. The same refresh also leaves a `fund_signals.sqlite` the dashboard never reads; shipping it is harmless.
+- `prices.sqlite` — from `make signals`. Optional, but without it — or if uid 1000 cannot read it — every Price / Day / YTD cell is `—`; the server then logs `NOTICE: price columns will show '—': <reason>` at startup (`docker compose logs 13f`). The same refresh also leaves a `fund_signals.sqlite` the dashboard never reads; shipping it is harmless.
 - `company_tickers_exchange.json` — the SEC ticker file cached by `enrich_tickers.py`. Optional.
 
 ```bash
