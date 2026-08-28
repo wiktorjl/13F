@@ -236,7 +236,8 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
   }
   /* Row links and the logo are the remaining per-row / header tap targets: grow the hit box
      symmetrically so the text stays exactly where it is. */
-  .dash-row a { display: inline-block; padding: 14px 4px; margin: -14px -4px; max-width: 100%; }
+  .dash-row a { display: inline-block; padding: 14px 4px; margin: -14px -4px; max-width: 100%; vertical-align: top; }
+  .dash-row .dash-name a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dash-logo { padding: 11px 4px; margin: -11px -4px; }
   .dash-status a {
     display: inline-block;
@@ -341,6 +342,7 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
     padding: 12px 4px;
     margin: -12px -4px;
   }
-  .dash-row a { display: inline-block; padding: 14px 4px; margin: -14px -4px; max-width: 100%; }
+  .dash-row a { display: inline-block; padding: 14px 4px; margin: -14px -4px; max-width: 100%; vertical-align: top; }
+  .dash-row .dash-name a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dash-logo { padding: 11px 4px; margin: -11px -4px; }
 }
