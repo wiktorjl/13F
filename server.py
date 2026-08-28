@@ -179,18 +179,27 @@ INSERT INTO prices.metadata VALUES ('available','0');
 PRICE_BAR_COLUMNS = frozenset({"symbol", "price_date", "close"})
 
 
-def price_cache_is_usable(path: Path | None = None) -> bool:
+def price_cache_problem(path: Path | None = None) -> str:
+    """'' when the price cache can be attached; otherwise a one-line reason for the operator."""
     path = path or PRICE_CACHE
     if not path.is_file():
-        return False
+        return f"{path} is missing (run `make signals`, or copy data/prices.sqlite next to the database)"
+    if not os.access(path, os.R_OK):
+        return f"{path} is not readable by uid {os.getuid()} (check ownership/permissions of data/)"
     try:
         with closing(sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)) as cache:
             columns = {row[1] for row in cache.execute("PRAGMA table_info(bars)")}
             tables = {row[0] for row in cache.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bars','metadata')")}
-        return PRICE_BAR_COLUMNS.issubset(columns) and tables == {"bars", "metadata"}
-    except (OSError, sqlite3.Error):
-        return False
+    except (OSError, sqlite3.Error) as exc:
+        return f"{path} could not be opened: {exc}"
+    if not (PRICE_BAR_COLUMNS.issubset(columns) and tables == {"bars", "metadata"}):
+        return f"{path} does not have the expected bars/metadata schema"
+    return ""
+
+
+def price_cache_is_usable(path: Path | None = None) -> bool:
+    return not price_cache_problem(path)
 
 
 def attach_price_cache(con: sqlite3.Connection) -> bool:
@@ -721,6 +730,9 @@ if __name__ == "__main__":
     server_class = IPv6ExplorerHTTPServer if ":" in args.host else ExplorerHTTPServer
     server=server_class((args.host,args.port),Handler)
     display_host = f"[{args.host}]" if ":" in args.host else args.host
+    problem = price_cache_problem()
+    if problem:
+        print(f"NOTICE: price columns will show '—': {problem}", file=sys.stderr, flush=True)
     print(f"13F Dashboard is running at http://{display_host}:{args.port}{BASE_PATH}/", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
     try: server.serve_forever()
