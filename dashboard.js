@@ -8,6 +8,8 @@ const MAX_PAGE = 100000;
 // Public prefix the app is served under (e.g. "/13f" behind a reverse proxy): derived from this script's own URL
 // so one build works at any mount point. Every history URL and API request carries it.
 const BASE_PATH = new URL(document.currentScript?.src ?? '/', location.href).pathname.replace(/\/[^/]*$/, '');
+// The server fingerprints this script's URL (?v=<content hash>); About shows it so a deployment can be identified.
+const BUILD_VERSION = new URL(document.currentScript?.src ?? '/', location.href).searchParams.get('v') || '';
 // The dashboard is the landing page: holdings at the root, the other views one segment below it. The root
 // view's URL is BASE_PATH + '/' ('/' when unprefixed). About is a static page: it carries no query state.
 const VIEW_ROUTES = {holdings: '', initiations: '/initiations', movers: '/movers', about: '/about'};
@@ -363,6 +365,7 @@ function renderAbout(meta) {
   $('#aboutQuarters').textContent = quarters ? fmtInt.format(quarters) : '—';
   $('#aboutSpan').textContent = first && last ? `${fmtPeriod(first.label)} to ${fmtPeriod(last.label)}` : '—';
   $('#aboutManagers').textContent = fmtManagers(toNumber(meta?.distinct_managers));
+  $('#aboutBuild').textContent = BUILD_VERSION || '—';
 }
 
 // /api/meta is fetched once and kept; a failed fetch leaves the dashes in place and is retried on the next visit.

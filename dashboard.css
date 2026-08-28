@@ -457,3 +457,5 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
   .dash-row .dash-name a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dash-logo { padding: 11px 4px; margin: -11px -4px; }
 }
+
+.dash-build { font-size: 14px; color: var(--accent); }
