@@ -104,13 +104,20 @@ FIXTURE_BARS = (
 
 class DashboardHelperTests(unittest.TestCase):
     def test_static_paths_are_exact_and_dashboard_routes_share_one_page(self) -> None:
-        self.assertEqual(server.static_path_for("/"), "/index.html")
-        for route in ("/dashboard", "/dashboard/initiations", "/dashboard/movers"):
-            self.assertEqual(server.static_path_for(route), "/dashboard.html")
+        # The dashboard is the landing page; the explorer moved to /explorer.
+        self.assertEqual(server.static_path_for("/"), "/dashboard.html")
+        self.assertEqual(server.static_path_for("/explorer"), "/index.html")
+        self.assertEqual(server.DASHBOARD_ROUTES, {"/", "/initiations", "/movers"})
+        self.assertEqual(server.DASHBOARD_ALIASES, {"/dashboard", "/dashboard/initiations", "/dashboard/movers"})
+        for route in server.DASHBOARD_ROUTES | server.DASHBOARD_ALIASES:
+            with self.subTest(route=route):
+                self.assertEqual(server.static_path_for(route), "/dashboard.html")
         for member in server.STATIC_PATHS:
             self.assertEqual(server.static_path_for(member), member)
-        for path in ("/dashboard/", "/dashboard/x", "/DASHBOARD", "/Dashboard", "/dashboard/movers/",
-                     "/dashboard.html/", "/index.html/", "/data/13f.sqlite", "/server.py", ""):
+        for path in ("/explorer/", "/explorer/x", "/Explorer", "/EXPLORER", "/initiations/", "/initiations/x",
+                     "/movers/", "/movers/x", "/Movers", "/dashboard/", "/dashboard/x", "/DASHBOARD", "/Dashboard",
+                     "/dashboard/movers/", "/dashboard.html/", "/index.html/", "/data/13f.sqlite", "/server.py",
+                     "//", "", "explorer", "/explorer.html"):
             with self.subTest(path=path):
                 self.assertIsNone(server.static_path_for(path))
 
@@ -413,11 +420,13 @@ class BasePathHelperTests(unittest.TestCase):
         with mock.patch.object(server, "BASE_PATH", "/13f"):
             for raw, expected in (
                 ("/13f", "/"), ("/13f/", "/"), ("/13f/index.html", "/index.html"), ("/13f/api/meta", "/api/meta"),
+                ("/13f/explorer", "/explorer"), ("/13f/initiations", "/initiations"), ("/13f/movers", "/movers"),
+                ("/13f/explorer/", "/explorer/"), ("/13f/movers/", "/movers/"),
                 ("/13f/dashboard/movers", "/dashboard/movers"), ("/13f/dashboard/", "/dashboard/"),
                 ("/13f/app.js", "/app.js"), ("/13f/13f/app.js", "/13f/app.js"),
                 # Unprefixed paths pass through unchanged (a proxy may strip the prefix itself);
                 # look-alikes are left for the allowlist to reject.
-                ("/", "/"), ("/api/meta", "/api/meta"), ("/dashboard", "/dashboard"),
+                ("/", "/"), ("/api/meta", "/api/meta"), ("/explorer", "/explorer"), ("/dashboard", "/dashboard"),
                 ("/13f-other", "/13f-other"), ("/13fx/app.js", "/13fx/app.js"), ("/13F/app.js", "/13F/app.js"),
                 ("", ""),
             ):
@@ -439,7 +448,8 @@ class BasePathHelperTests(unittest.TestCase):
                 '<!doctype html><html><head><link rel="stylesheet" href="/styles.css">'
                 '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\'/%3E">'
                 '<link rel="stylesheet" href="//cdn.example/x.css"><link href="relative.css" rel="stylesheet">'
-                '</head><body><a href="/dashboard">D</a><a href="/dashboard?sort=ticker&amp;direction=asc">S</a>'
+                '</head><body><a href="/movers">D</a><a href="/?sort=ticker&amp;direction=asc">S</a>'
+                '<a href="/explorer">E</a>'
                 '<a href="?view=stocks">Q</a><a href="#top">H</a><a href="/">Root</a>'
                 '<img src="/13f/already.png"><a href="/13f">Prefixed</a><a href="/13fx/other">Lookalike</a>'
                 '<script src="/app.js"></script></body></html>'
@@ -452,9 +462,9 @@ class BasePathHelperTests(unittest.TestCase):
                     self.assertEqual(server.render_document("dashboard.html"), b'<script src="/dashboard.js"></script>')
                 with mock.patch.object(server, "BASE_PATH", "/13f"):
                     rendered = server.render_document("index.html").decode("utf-8")
-                    for expected in ('href="/13f/styles.css"', 'src="/13f/app.js"', 'href="/13f/dashboard"',
-                                     'href="/13f/dashboard?sort=ticker&amp;direction=asc"', 'href="/13f/"',
-                                     'href="/13f/13fx/other"'):
+                    for expected in ('href="/13f/styles.css"', 'src="/13f/app.js"', 'href="/13f/movers"',
+                                     'href="/13f/?sort=ticker&amp;direction=asc"', 'href="/13f/"',
+                                     'href="/13f/explorer"', 'href="/13f/13fx/other"'):
                         with self.subTest(expected=expected):
                             self.assertIn(expected, rendered)
                     for untouched in ('href="data:image/svg+xml,', 'href="//cdn.example/x.css"',
@@ -476,11 +486,14 @@ class BasePathHelperTests(unittest.TestCase):
             explorer = server.render_document("index.html").decode("utf-8")
             self.assertIn('src="/13f/app.js"', explorer)
             self.assertIn('href="/13f/styles.css"', explorer)
-            self.assertIn('href="/13f/dashboard"', explorer)
+            self.assertIn('class="dashboard-link" href="/13f/"', explorer)
             dashboard = server.render_document("dashboard.html").decode("utf-8")
             self.assertIn('src="/13f/dashboard.js"', dashboard)
             self.assertIn('href="/13f/dashboard.css"', dashboard)
-            self.assertIn('href="/13f/dashboard/movers"', dashboard)
+            self.assertIn('id="dashLogo" class="dash-logo" href="/13f/"', dashboard)
+            self.assertIn('href="/13f/initiations"', dashboard)
+            self.assertIn('href="/13f/movers"', dashboard)
+            self.assertIn('href="/13f/?sort=ticker&amp;direction=asc"', dashboard)
             for document in (explorer, dashboard):
                 self.assertNotIn("//13f", document)
                 self.assertIn('href="data:image/svg+xml,', document)

@@ -116,21 +116,30 @@ class HTTPIntegrationTests(unittest.TestCase):
         self.assertTrue(keys.issubset(value), f"missing {sorted(keys - set(value))}; got {sorted(value)}")
 
     def test_exact_static_allowlist_get_and_head(self) -> None:
+        # path -> (body prefix, served document or None for JS/CSS)
         allowed = {
-            "/": b"<!doctype html>",
-            "/index.html": b"<!doctype html>",
-            "/app.js": b"const BASE_PATH",
-            "/styles.css": b":root",
-            "/app.js?v=fixture": b"const BASE_PATH",
-            "/dashboard": b"<!doctype html>",
-            "/dashboard/initiations": b"<!doctype html>",
-            "/dashboard/movers": b"<!doctype html>",
-            "/dashboard/movers?horizon=2&side=losers&page=2": b"<!doctype html>",
-            "/dashboard.html": b"<!doctype html>",
-            "/dashboard.js": b"'use strict';",
-            "/dashboard.css": b":root",
+            "/": (b"<!doctype html>", "dashboard.html"),
+            "/initiations": (b"<!doctype html>", "dashboard.html"),
+            "/movers": (b"<!doctype html>", "dashboard.html"),
+            "/movers?horizon=2&side=losers&page=2": (b"<!doctype html>", "dashboard.html"),
+            "/?sort=ticker&direction=asc": (b"<!doctype html>", "dashboard.html"),
+            # Legacy aliases from before the dashboard became the landing page.
+            "/dashboard": (b"<!doctype html>", "dashboard.html"),
+            "/dashboard/initiations": (b"<!doctype html>", "dashboard.html"),
+            "/dashboard/movers": (b"<!doctype html>", "dashboard.html"),
+            "/dashboard/movers?horizon=2&side=losers&page=2": (b"<!doctype html>", "dashboard.html"),
+            "/explorer": (b"<!doctype html>", "index.html"),
+            "/explorer?view=stocks": (b"<!doctype html>", "index.html"),
+            "/index.html": (b"<!doctype html>", "index.html"),
+            "/dashboard.html": (b"<!doctype html>", "dashboard.html"),
+            "/app.js": (b"const BASE_PATH", None),
+            "/styles.css": (b":root", None),
+            "/app.js?v=fixture": (b"const BASE_PATH", None),
+            "/dashboard.js": (b"'use strict';", None),
+            "/dashboard.css": (b":root", None),
         }
-        for path, prefix in allowed.items():
+        markers = {"dashboard.html": b'id="dashRows"', "index.html": b'id="fundsBody"'}
+        for path, (prefix, document) in allowed.items():
             with self.subTest(method="GET", path=path):
                 status, headers, body = self.request(path)
                 self.assertEqual(status, 200)
@@ -138,13 +147,14 @@ class HTTPIntegrationTests(unittest.TestCase):
                 self.assertEqual(int(headers["content-length"]), len(body))
                 # Every static response revalidates; only the API is no-store.
                 self.assertEqual(headers.get("cache-control"), "no-cache")
-                if prefix == b"<!doctype html>":
+                if document is not None:
                     self.assertEqual(headers.get("content-type"), "text/html; charset=utf-8")
                     # Without a base path the documents are served byte-for-byte.
-                    document = "dashboard.html" if path.startswith("/dashboard") else "index.html"
                     self.assertEqual(body, (server.ROOT / document).read_bytes())
-                if path.startswith("/dashboard") and prefix == b"<!doctype html>":
-                    self.assertIn(b'id="dashRows"', body)
+                    self.assertIn(markers[document], body)
+                    for other, marker in markers.items():
+                        if other != document:
+                            self.assertNotIn(marker, body)
             with self.subTest(method="HEAD", path=path):
                 status, headers, body = self.request(path, "HEAD")
                 self.assertEqual(status, 200)
@@ -162,6 +172,15 @@ class HTTPIntegrationTests(unittest.TestCase):
             "/APP.JS",
             "/%2e%2e/server.py",
             "/app%2ejs",
+            "/explorer/",
+            "/explorer/x",
+            "/Explorer",
+            "/EXPLORER",
+            "/initiations/",
+            "/initiations/x",
+            "/movers/",
+            "/movers/x",
+            "/Movers",
             "/dashboard/",
             "/dashboard/x",
             "/dashboard/movers/",
@@ -181,8 +200,8 @@ class HTTPIntegrationTests(unittest.TestCase):
 
     def test_security_headers_cover_success_and_error_responses(self) -> None:
         paths = (("/", 200), ("/api/meta", 200), ("/api/not-real", 404), ("/server.py", 404),
-                 ("/dashboard", 200), ("/dashboard/movers", 200), ("/dashboard.js", 200),
-                 ("/api/dashboard", 200), ("/api/dashboard?view=nope", 400), ("/dashboard/x", 404))
+                 ("/explorer", 200), ("/movers", 200), ("/dashboard", 200), ("/dashboard.js", 200),
+                 ("/api/dashboard", 200), ("/api/dashboard?view=nope", 400), ("/explorer/", 404), ("/movers/", 404))
         expected = {
             "x-content-type-options": "nosniff",
             "x-frame-options": "DENY",
@@ -982,26 +1001,35 @@ class BasePathTests(unittest.TestCase):
         self.assertIsInstance(self._patches[1], mock._patch)
 
     def test_prefixed_and_unprefixed_paths_are_served(self) -> None:
+        html = "text/html; charset=utf-8"
+        # path -> (body prefix, content type, served document or None)
         expected = {
-            "/13f": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/index.html": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/?view=stocks": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/app.js": (b"const BASE_PATH", "text/javascript"),
-            "/13f/styles.css": (b":root", "text/css"),
-            "/13f/dashboard": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/dashboard/initiations": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/dashboard/movers": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/dashboard/movers?horizon=2&side=losers": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/dashboard.html": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/13f/dashboard.js": (b"'use strict';", "text/javascript"),
-            "/13f/dashboard.css": (b":root", "text/css"),
+            "/13f": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/?sort=ticker&direction=asc": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/initiations": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/movers": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/movers?horizon=2&side=losers": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/dashboard": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/dashboard/initiations": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/dashboard/movers": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/dashboard.html": (b"<!doctype html>", html, "dashboard.html"),
+            "/13f/explorer": (b"<!doctype html>", html, "index.html"),
+            "/13f/explorer?view=stocks": (b"<!doctype html>", html, "index.html"),
+            "/13f/index.html": (b"<!doctype html>", html, "index.html"),
+            "/13f/app.js": (b"const BASE_PATH", "text/javascript", None),
+            "/13f/styles.css": (b":root", "text/css", None),
+            "/13f/dashboard.js": (b"'use strict';", "text/javascript", None),
+            "/13f/dashboard.css": (b":root", "text/css", None),
             # A proxy that strips the prefix delivers these; they keep working.
-            "/": (b"<!doctype html>", "text/html; charset=utf-8"),
-            "/app.js": (b"const BASE_PATH", "text/javascript"),
-            "/dashboard/movers": (b"<!doctype html>", "text/html; charset=utf-8"),
+            "/": (b"<!doctype html>", html, "dashboard.html"),
+            "/explorer": (b"<!doctype html>", html, "index.html"),
+            "/movers": (b"<!doctype html>", html, "dashboard.html"),
+            "/dashboard/movers": (b"<!doctype html>", html, "dashboard.html"),
+            "/app.js": (b"const BASE_PATH", "text/javascript", None),
         }
-        for path, (prefix, content_type) in expected.items():
+        markers = {"dashboard.html": b'id="dashRows"', "index.html": b'id="fundsBody"'}
+        for path, (prefix, content_type, document) in expected.items():
             with self.subTest(method="GET", path=path):
                 status, headers, body = self.request(path)
                 self.assertEqual(status, 200, body[:120])
@@ -1012,14 +1040,21 @@ class BasePathTests(unittest.TestCase):
                 self.assertEqual(headers.get("x-content-type-options"), "nosniff")
                 self.assertEqual(headers.get("x-frame-options"), "DENY")
                 self.assertIn("default-src 'self'", headers.get("content-security-policy", ""))
+                if document is not None:
+                    self.assertIn(markers[document], body)
+                    for other, marker in markers.items():
+                        if other != document:
+                            self.assertNotIn(marker, body)
             with self.subTest(method="HEAD", path=path):
                 status, headers, body = self.request(path, "HEAD")
                 self.assertEqual(status, 200)
                 self.assertEqual(body, b"")
                 self.assertGreater(int(headers["content-length"]), 0)
                 self.assertEqual(headers.get("cache-control"), "no-cache")
-        for path in ("/13f-other", "/13fx/app.js", "/13f/dashboard/", "/13f/server.py", "/13f/data/13f.sqlite",
-                     "/13f/13f/app.js", "/13F/app.js", "/13f//app.js", "/13f/dashboard/movers/", "/13f/index.html/"):
+        for path in ("/13f-other", "/13fx/app.js", "/13f/explorer/", "/13f/initiations/", "/13f/movers/",
+                     "/13f/dashboard/", "/13f/server.py", "/13f/data/13f.sqlite", "/13f/13f/app.js",
+                     "/13F/app.js", "/13f//app.js", "/13f/dashboard/movers/", "/13f/index.html/",
+                     "/13f/Explorer", "/13f/explorer/x", "/13f/movers/x"):
             for method in ("GET", "HEAD"):
                 with self.subTest(method=method, path=path):
                     status, headers, body = self.request(path, method)
@@ -1029,27 +1064,32 @@ class BasePathTests(unittest.TestCase):
                         self.assertEqual(body, b"")
 
     def test_documents_carry_the_prefix(self) -> None:
-        for path in ("/13f", "/13f/", "/13f/index.html", "/"):
+        for path in ("/13f/explorer", "/13f/explorer?view=stocks", "/13f/index.html", "/explorer"):
             with self.subTest(path=path):
                 status, _, body = self.request(path)
                 self.assertEqual(status, 200)
                 text = body.decode("utf-8")
                 self.assertIn('src="/13f/app.js"', text)
                 self.assertIn('href="/13f/styles.css"', text)
-                self.assertIn('href="/13f/dashboard"', text)
+                self.assertIn('class="dashboard-link" href="/13f/"', text)
                 self.assertNotIn("//13f", text)
                 self.assertNotIn('src="/app.js"', text)
-        for path in ("/13f/dashboard", "/13f/dashboard/movers", "/13f/dashboard.html", "/dashboard"):
+        for path in ("/13f", "/13f/", "/13f/initiations", "/13f/movers", "/13f/dashboard", "/13f/dashboard/movers",
+                     "/13f/dashboard.html", "/", "/dashboard"):
             with self.subTest(path=path):
                 status, _, body = self.request(path)
                 self.assertEqual(status, 200)
                 text = body.decode("utf-8")
                 self.assertIn('src="/13f/dashboard.js"', text)
                 self.assertIn('href="/13f/dashboard.css"', text)
-                self.assertIn('href="/13f/dashboard"', text)
-                self.assertIn('href="/13f/dashboard/movers"', text)
+                self.assertIn('id="dashLogo" class="dash-logo" href="/13f/"', text)
+                self.assertIn('href="/13f/initiations"', text)
+                self.assertIn('href="/13f/movers"', text)
+                self.assertIn('href="/13f/movers?side=losers"', text)
+                self.assertIn('href="/13f/?sort=ticker&amp;direction=asc"', text)
                 self.assertIn(b'id="dashRows"', body)
                 self.assertNotIn("//13f", text)
+                self.assertNotIn("/13f/dashboard", text.replace("/13f/dashboard.js", "").replace("/13f/dashboard.css", ""))
                 self.assertIn('href="data:image/svg+xml,', text)
         # Scripts and styles are served verbatim (the prefix is derived client-side).
         _, _, script = self.request("/13f/app.js")

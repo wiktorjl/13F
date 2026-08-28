@@ -82,8 +82,8 @@ def audit_document(name: str, *, scripts: list[str], stylesheets: list[str],
         raise VerificationFailure(f"{name} contains inline style or event-handler attributes that violate the static CSP")
     if audit.preloads:
         raise VerificationFailure(f"{name} contains preload links outside the static allowlist: {audit.preloads}")
-    # Root-absolute references ("/dashboard.js") are how the dashboard sub-paths
-    # such as /dashboard/movers reach the same allowlisted assets. Tolerate exactly
+    # Root-absolute references ("/dashboard.js") are how the routed documents
+    # (/, /initiations, /movers, /explorer) reach the same allowlisted assets. Tolerate exactly
     # one leading slash: "//dashboard.js" is a protocol-relative external host.
     if ([src.removeprefix("/") for src in audit.scripts] != scripts
             or [href.removeprefix("/") for href in audit.stylesheets] != stylesheets):

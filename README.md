@@ -10,7 +10,7 @@ python3 server.py
 
 The first run builds `data/13f.sqlite`; this can take a few minutes. The server rebuilds when archive contents, ticker mappings, the market-cap snapshot, the sector snapshot, the featured research set, or the schema changes.
 
-By default it binds only to `127.0.0.1` on port `8013`. Open <http://127.0.0.1:8013>. To use it from another device on a trusted network, opt in with that machine's LAN address:
+By default it binds only to `127.0.0.1` on port `8013`. Open <http://127.0.0.1:8013> — the root is the dashboard (Top Holdings; `/initiations` and `/movers` are its other two views) and the explorer is at <http://127.0.0.1:8013/explorer>. To use it from another device on a trusted network, opt in with that machine's LAN address:
 
 ```bash
 python3 server.py --host 192.168.x.x
@@ -28,7 +28,7 @@ The explorer and database builder use only the Python standard library and local
 
 ## Deploying with Docker
 
-The repository ships a `Dockerfile`, a `.dockerignore`, and a `docker-compose.yml` for running the explorer as a read-only container behind a reverse proxy (the compose file is written for Traefik at `https://soto.wiktor.io/13f`). The image is `python:3.13-slim` plus the scripts, the six static assets, the tests, and the README — no `pip` and no `npm`; `make` and Debian's `nodejs` are the only extra packages, installed so that `make signals` and `make verify-fast` also work inside the container. It runs as the non-root user `app` (uid/gid 1000), listens on `0.0.0.0:8080`, and reads everything from the `/app/data` volume. Source archives are never copied into the image: `.dockerignore` excludes `*_form13f.zip`, `data/`, `artifacts/`, bytecode caches, and `.github/`.
+The repository ships a `Dockerfile`, a `.dockerignore`, and a `docker-compose.yml` for running the explorer as a read-only container behind a reverse proxy (the compose file is written for Traefik at `https://soto.wiktor.io/13f` — the dashboard; the explorer is `https://soto.wiktor.io/13f/explorer`). The image is `python:3.13-slim` plus the scripts, the six static assets, the tests, and the README — no `pip` and no `npm`; `make` and Debian's `nodejs` are the only extra packages, installed so that `make signals` and `make verify-fast` also work inside the container. It runs as the non-root user `app` (uid/gid 1000), listens on `0.0.0.0:8080`, and reads everything from the `/app/data` volume. Source archives are never copied into the image: `.dockerignore` excludes `*_form13f.zip`, `data/`, `artifacts/`, bytecode caches, and `.github/`.
 
 ### What goes in `data/`
 
@@ -53,7 +53,7 @@ On the VPS, with the sources and `data/` side by side (the compose file bind-mou
 ```bash
 chown -R 1000:1000 data                    # the container runs as uid/gid 1000
 docker compose up -d --build
-docker compose logs -f 13f                 # "13F Explorer is running at http://0.0.0.0:8080/13f/"
+docker compose logs -f 13f                 # "13F Explorer is running at http://0.0.0.0:8080/13f/ (dashboard; explorer at /13f/explorer)"
 docker compose ps                          # healthy once ${BASE_PATH}/api/meta answers (start period 30 s, every 60 s)
 ```
 
@@ -63,7 +63,7 @@ The container prints `WARNING: the explorer is being exposed beyond this compute
 
 The entrypoint is `python3 server.py --host 0.0.0.0 --port 8080`; everything else comes from the environment (each variable has a matching CLI flag for running outside Docker):
 
-- `BASE_PATH` / `--base-path` — the public URL prefix, e.g. `/13f` (default empty, i.e. served at `/`). Must start with `/`, no trailing slash. The server accepts requests both with and without the prefix, rewrites root-absolute `href`/`src` attributes in the HTML documents to carry it, and the two scripts derive it from their own `<script src>` at load time, so `/api/...` fetches and dashboard routes follow it. History URLs are relative and need nothing.
+- `BASE_PATH` / `--base-path` — the public URL prefix, e.g. `/13f` (default empty, i.e. served at `/`). Must start with `/`, no trailing slash. The server accepts requests both with and without the prefix, rewrites root-absolute `href`/`src` attributes in the HTML documents to carry it, and the two scripts derive it from their own `<script src>` at load time, so `/api/...` fetches and the dashboard routes (`/13f/`, `/13f/initiations`, `/13f/movers`, explorer at `/13f/explorer`) follow it. The explorer's history URLs are relative queries and need nothing.
 - `TRUST_DATABASE` / `--trust-database` (`1`, `true`, or `yes`) — start from an existing `data/13f.sqlite` and check only that its `schema_version` matches; skip hashing the source archives and JSON inputs. Implies `--no-build`; the container never builds in this mode. This is what the compose file uses, because the archives are not shipped.
 - `ARCHIVE_DIR` — where `server.py` and `build_database.py --source-dir` look for `*_form13f.zip` (default: the application directory). Only needed when the container should verify or rebuild the database itself.
 
@@ -87,7 +87,7 @@ Known ticker symbols are shown before issuer names; unresolved symbols appear as
 
 ## Dashboard
 
-The same server also serves a second, deliberately minimal page at <http://127.0.0.1:8013/dashboard> (the explorer's title bar links to it). It is a single centered list of securities with three views and no filters, search, charts, or fund metadata: **Top Holdings** (`/dashboard`), **Fresh Initiations** (`/dashboard/initiations`), and **Top Movers** (`/dashboard/movers`, with a Gainers | Losers switch and a 1Q–4Q timeframe). It is built from `dashboard.html`, `dashboard.js`, and `dashboard.css` and reads one endpoint, `/api/dashboard`. The list is a table with a plain-text header row (Ticker, Name, the view's metric, Price, Day, YTD, Sector) whose labels sort the list; every row links its ticker and name to Yahoo Finance.
+The dashboard is the landing page: the same server serves it at the root, <http://127.0.0.1:8013/>, and the explorer at `/explorer` (the explorer's title bar links back to the dashboard). It is a deliberately minimal page — a single centered list of securities with three views and no filters, search, charts, or fund metadata: **Top Holdings** (`/`), **Fresh Initiations** (`/initiations`), and **Top Movers** (`/movers`, with a Gainers | Losers switch and a 1Q–4Q timeframe). The pre-landing-page URLs `/dashboard`, `/dashboard/initiations`, and `/dashboard/movers` still serve the same views so old links keep working; the page rewrites them to the canonical path on load and never emits them. Trailing-slash variants of the sub-paths (`/explorer/`, `/initiations/`, `/movers/`) are 404s, as before. It is built from `dashboard.html`, `dashboard.js`, and `dashboard.css` and reads one endpoint, `/api/dashboard`. The list is a table with a plain-text header row (Ticker, Name, the view's metric, Price, Day, YTD, Sector) whose labels sort the list; every row links its ticker and name to Yahoo Finance.
 
 By default the dashboard lists only securities that have a ticker. Rows whose `securities.ticker` is blank — a CUSIP that neither the exact OpenFIGI lookup nor the SEC issuer-name match resolved — are dropped in all three views before sorting, paging, and counting, so `count` reflects the filtered list (Movers evaluates the P−k side first and drops an unmapped security only afterwards). Append `?unmapped=include` to any dashboard URL to show them; they render with an em dash in the Ticker column and their SEC issuer name. The switch travels with view, sort, and page changes, is omitted from the URL at the default, and has no visible control. `/api/dashboard` takes the same `unmapped` ∈ `exclude`, `include` parameter (default `exclude`), echoes the effective value, and answers 400 to anything else.
 

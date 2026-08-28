@@ -41,7 +41,12 @@ STATIC_PATHS = {"/index.html", "/app.js", "/styles.css", "/dashboard.html", "/da
 HTML_DOCUMENTS = frozenset({"index.html", "dashboard.html"})
 # href="/..." and src="/..." in the two documents; "//host" and data: URLs never match.
 ROOT_RELATIVE_ATTRIBUTE = re.compile(r'\b(href|src)="(/[^"]*)"')
-DASHBOARD_ROUTES = {"/dashboard", "/dashboard/initiations", "/dashboard/movers"}
+# The dashboard is the landing page: "/" (Top Holdings), "/initiations", "/movers".  The
+# original explorer lives at "/explorer".  The pre-landing-page "/dashboard…" URLs stay
+# as aliases so old links keep working (dashboard.js rewrites them to the canonical path).
+DASHBOARD_ROUTES = {"/", "/initiations", "/movers"}
+DASHBOARD_ALIASES = {"/dashboard", "/dashboard/initiations", "/dashboard/movers"}
+EXPLORER_ROUTE = "/explorer"
 DASHBOARD_VIEWS = frozenset({"holdings", "initiations", "movers"})
 DASHBOARD_SIDES = frozenset({"gainers", "losers"})
 DASHBOARD_MAX_HORIZON = 4
@@ -402,10 +407,15 @@ def dashboard_order(options: dict, *, priced: bool) -> str:
 
 
 def static_path_for(path: str) -> str | None:
-    """Map a request path onto the exact static allowlist; anything else is 404."""
-    if path == "/":
+    """Map a request path onto the exact static allowlist; anything else is 404.
+
+    The dashboard answers at the root and its two sub-paths (plus the legacy
+    ``/dashboard…`` aliases); the explorer answers at ``/explorer``.  Trailing
+    slashes and case variants are not routes.
+    """
+    if path == EXPLORER_ROUTE:
         return "/index.html"
-    if path in DASHBOARD_ROUTES:
+    if path in DASHBOARD_ROUTES or path in DASHBOARD_ALIASES:
         return "/dashboard.html"
     return path if path in STATIC_PATHS else None
 
@@ -1496,7 +1506,8 @@ if __name__ == "__main__":
     server_class = IPv6ExplorerHTTPServer if ":" in args.host else ExplorerHTTPServer
     server=server_class((args.host,args.port),Handler)
     display_host = f"[{args.host}]" if ":" in args.host else args.host
-    print(f"13F Explorer is running at http://{display_host}:{args.port}{BASE_PATH}/", flush=True)
+    print(f"13F Explorer is running at http://{display_host}:{args.port}{BASE_PATH}/ "
+          f"(dashboard; explorer at {BASE_PATH}{EXPLORER_ROUTE})", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
     try: server.serve_forever()
     except KeyboardInterrupt: print("\nStopped.")

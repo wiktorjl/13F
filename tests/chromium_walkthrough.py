@@ -667,7 +667,7 @@ class UIWalkthrough:
         self.dashboard_ready("holdings")
         cdp.wait_for("ticker header ascending", f"{header_sort('ticker')} === 'ascending' && {header_sort('metric')} === 'none' && {glyph('ticker')} === '\u2191'")
         cdp.wait_for("tickers in ascending order", f"(() => {{ const t = {tickers}; return t.length >= 2 && t[0] <= t[1]; }})()")
-        cdp.wait_for("ticker ascending URL", "location.pathname === '/dashboard' && location.search === '?sort=ticker&direction=asc'")
+        cdp.wait_for("ticker ascending URL", "location.pathname === '/' && location.search === '?sort=ticker&direction=asc'")
 
         mark = len(cdp.responses)
         cdp.click('#dashHead th[data-sort="ticker"] a')
@@ -675,7 +675,7 @@ class UIWalkthrough:
         self.dashboard_ready("holdings")
         cdp.wait_for("ticker header descending", f"{header_sort('ticker')} === 'descending' && {glyph('ticker')} === '\u2193'")
         cdp.wait_for("tickers in descending order", f"(() => {{ const t = {tickers}; return t.length >= 2 && t[0] >= t[1]; }})()")
-        cdp.wait_for("ticker descending URL", "location.pathname === '/dashboard' && location.search === '?sort=ticker'")
+        cdp.wait_for("ticker descending URL", "location.pathname === '/' && location.search === '?sort=ticker'")
 
         mark = len(cdp.responses)
         cdp.click('#dashHead th[data-sort="metric"] a')
@@ -686,7 +686,7 @@ class UIWalkthrough:
         self.dashboard_ready("holdings")
         cdp.wait_for("metric header descending", f"{header_sort('metric')} === 'descending' && {header_sort('ticker')} === 'none' && {glyph('metric')} === '\u2193'")
         cdp.wait_for("holdings weight metrics after sort reset", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith('%'))")
-        cdp.wait_for("default holdings URL", "location.pathname === '/dashboard' && !location.search")
+        cdp.wait_for("default holdings URL", "location.pathname === '/' && !location.search")
 
     def dashboard_views(self) -> None:
         """Holdings (with sorting and paging), Fresh Initiations, and Top Movers at 2Q/Losers, ending on the desktop check."""
@@ -701,7 +701,8 @@ class UIWalkthrough:
              "screenWidth": 1440, "screenHeight": 1000},
         )
         mark = len(cdp.responses)
-        cdp.command("Page.navigate", {"url": self.app_url + "dashboard"})
+        # The dashboard is the landing page: the app root serves it.
+        cdp.command("Page.navigate", {"url": self.app_url})
         cdp.wait_for("dashboard document readiness", "document.readyState === 'complete'")
         cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "page": "1", "size": "100"})
         self.dashboard_ready("holdings")
@@ -720,7 +721,7 @@ class UIWalkthrough:
             cdp.click("#dashNext")
             cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "page": "2"})
             self.dashboard_ready("holdings")
-            cdp.wait_for("dashboard page 2 URL", "location.pathname === '/dashboard' && new URLSearchParams(location.search).get('page') === '2'")
+            cdp.wait_for("dashboard page 2 URL", "location.pathname === '/' && new URLSearchParams(location.search).get('page') === '2'")
             cdp.wait_for("dashboard page 2 focus", "document.activeElement?.id === 'dashRows'")
             cdp.wait_for("Previous enabled on page 2", "document.querySelector('#dashPrev')?.getAttribute('aria-disabled') !== 'true'")
 
@@ -730,7 +731,7 @@ class UIWalkthrough:
         self.dashboard_ready("initiations")
         cdp.wait_for("new-holder metrics", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith(' new'))")
         cdp.wait_for("initiation directions", "[...document.querySelectorAll('#dashRows .dash-direction')].every(node => ['up', 'down', 'flat'].some(name => node.classList.contains(name)))")
-        cdp.wait_for("initiations URL", "location.pathname === '/dashboard/initiations' && !location.search")
+        cdp.wait_for("initiations URL", "location.pathname === '/initiations' && !location.search")
 
         mark = len(cdp.responses)
         cdp.click('#dashNav a[data-view="movers"]')
@@ -753,7 +754,7 @@ class UIWalkthrough:
         cdp.wait_for("losers active", "Boolean(document.querySelector('#dashSide a.active[data-side=\"losers\"][aria-current=\"page\"]'))")
         cdp.wait_for("losers direction", "document.querySelector('#dashRows .dash-direction')?.classList.contains('down')")
         cdp.wait_for("movers metrics", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith('pp'))")
-        cdp.wait_for("movers URL", "location.pathname === '/dashboard/movers' && location.search === '?horizon=2&side=losers'")
+        cdp.wait_for("movers URL", "location.pathname === '/movers' && location.search === '?horizon=2&side=losers'")
         self.dashboard_viewport_check("desktop", 1440, 1000, False)
 
     def run(self) -> None:
@@ -771,8 +772,10 @@ class UIWalkthrough:
 
         def initial_load() -> None:
             mark = len(cdp.responses)
-            cdp.command("Page.navigate", {"url": self.app_url})
+            # The explorer lives one segment below the root (the root is the dashboard).
+            cdp.command("Page.navigate", {"url": self.app_url + "explorer"})
             cdp.wait_for("document readiness", "document.readyState === 'complete'")
+            cdp.wait_for("explorer document", "location.pathname === '/explorer' && Boolean(document.querySelector('#fundsBody'))")
             cdp.wait_for_api("/api/meta", mark)
             cdp.wait_for_api("/api/funds", mark)
             self.table_ready("#funds", "#fundsBody", "#fundSummary")

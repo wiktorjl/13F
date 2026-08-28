@@ -8,9 +8,16 @@ const MAX_PAGE = 100000;
 // Public prefix the app is served under (e.g. "/13f" behind a reverse proxy): derived from this script's own URL
 // so one build works at any mount point. Every history URL and API request carries it.
 const BASE_PATH = new URL(document.currentScript?.src ?? '/', location.href).pathname.replace(/\/[^/]*$/, '');
-const VIEW_ROUTES = {holdings: '/dashboard', initiations: '/dashboard/initiations', movers: '/dashboard/movers'};
-const ROUTE_VIEWS = Object.fromEntries(Object.entries(VIEW_ROUTES).map(([view, path]) => [path, view]));
-const VIEW_PATHS = Object.fromEntries(Object.entries(VIEW_ROUTES).map(([view, path]) => [view, BASE_PATH + path]));
+// The dashboard is the landing page: holdings at the root, the other views one segment below it. The root
+// view's URL is BASE_PATH + '/' ('/' when unprefixed); the explorer lives at BASE_PATH + '/explorer'.
+const VIEW_ROUTES = {holdings: '', initiations: '/initiations', movers: '/movers'};
+// Pre-landing-page URLs still resolve (the server serves them too) but are never emitted.
+const LEGACY_ROUTE_VIEWS = {'/dashboard': 'holdings', '/dashboard/initiations': 'initiations', '/dashboard/movers': 'movers'};
+const ROUTE_VIEWS = {
+  ...Object.fromEntries(Object.entries(VIEW_ROUTES).map(([view, path]) => [path || '/', view])),
+  ...LEGACY_ROUTE_VIEWS
+};
+const VIEW_PATHS = Object.fromEntries(Object.entries(VIEW_ROUTES).map(([view, path]) => [view, BASE_PATH + (path || '/')]));
 // Securities without a ticker are hidden unless the URL says ?unmapped=include (a documented switch, no control).
 const UNMAPPED_VALUES = new Set(['exclude', 'include']);
 const VIEW_TITLES = {holdings: 'Top Holdings', initiations: 'Fresh Initiations', movers: 'Top Movers'};
@@ -146,11 +153,17 @@ const viewDirection = (route) => route.view === 'movers' && route.side === 'lose
 const startDirection = (route, sort) => SORT_DEFAULTS.get(sort) || viewDirection(route);
 const flip = (direction) => direction === 'asc' ? 'desc' : 'asc';
 
-// The view named by a path, with the public prefix removed when present. Unprefixed paths still resolve (the
-// server accepts them too); anything else, including a trailing slash, is the holdings default.
-function viewFromPath(pathname) {
+// A path with the public prefix removed when present; the bare prefix is the root. Unprefixed paths still
+// resolve (the server accepts them too).
+function unprefixedPath(pathname) {
   const prefixed = BASE_PATH && (pathname === BASE_PATH || pathname.startsWith(`${BASE_PATH}/`));
-  return ROUTE_VIEWS[prefixed ? pathname.slice(BASE_PATH.length) : pathname] || 'holdings';
+  return (prefixed ? pathname.slice(BASE_PATH.length) : pathname) || '/';
+}
+
+// The view named by a path: the root, '/initiations', '/movers', or a legacy '/dashboard…' alias. Anything
+// else, including a trailing slash on a sub-path, is the holdings default.
+function viewFromPath(pathname) {
+  return ROUTE_VIEWS[unprefixedPath(pathname)] || 'holdings';
 }
 
 function routeFromUrl(url = new URL(location.href)) {
@@ -348,7 +361,12 @@ function init() {
   $('#dashRows').tabIndex = -1;
   document.addEventListener('click', handleClick);
   window.addEventListener('popstate', () => navigate(routeFromUrl(), false));
-  navigate(routeFromUrl(), false);
+  const route = routeFromUrl();
+  // A legacy /dashboard… entry URL is rewritten in place to its canonical path; the query is kept as typed.
+  if (Object.hasOwn(LEGACY_ROUTE_VIEWS, unprefixedPath(location.pathname))) {
+    history.replaceState(null, '', `${VIEW_PATHS[route.view]}${location.search}`);
+  }
+  navigate(route, false);
 }
 
 init();
