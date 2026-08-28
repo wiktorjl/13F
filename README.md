@@ -16,7 +16,7 @@ By default it binds only to `127.0.0.1` on port `8013`. Open <http://127.0.0.1:8
 python3 server.py --host 192.168.x.x
 ```
 
-Non-loopback binding prints a warning. The HTTP server exposes exactly three static assets (`dashboard.html`, `dashboard.js`, `dashboard.css`), the four page routes and their three legacy aliases (`/dashboard`, `/dashboard/initiations`, `/dashboard/movers`), and two JSON endpoints (`/api/meta`, `/api/dashboard`). Everything else — including trailing-slash variants such as `/about/` — is a 404. Source archives, scripts, caches, and the SQLite database are never served.
+Non-loopback binding prints a warning. Asset URLs in the served page carry a content hash (`/dashboard.css?v=…`), so a new deployment never shows a stale stylesheet from a browser or proxy cache. The HTTP server exposes exactly three static assets (`dashboard.html`, `dashboard.js`, `dashboard.css`), the four page routes and their three legacy aliases (`/dashboard`, `/dashboard/initiations`, `/dashboard/movers`), and two JSON endpoints (`/api/meta`, `/api/dashboard`). Everything else — including trailing-slash variants such as `/about/` — is a 404. Source archives, scripts, caches, and the SQLite database are never served.
 
 Use `--port` to choose another port and `--no-build` to require an already-current database. Two more flags exist for hosting the page behind a reverse proxy — `--base-path /13f` (or `BASE_PATH=/13f`) serves everything under a URL prefix, and `--trust-database` (or `TRUST_DATABASE=1`) starts from a database built elsewhere without re-hashing the source archives; see [Deploying with Docker](#deploying-with-docker). Rebuild manually after changing the archives:
 

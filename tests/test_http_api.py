@@ -153,8 +153,10 @@ class HTTPIntegrationTests(unittest.TestCase):
                 self.assertEqual(headers.get("cache-control"), "no-cache")
                 if document is not None:
                     self.assertEqual(headers.get("content-type"), "text/html; charset=utf-8")
-                    # Without a base path the document is served byte-for-byte.
-                    self.assertEqual(body, (server.ROOT / document).read_bytes())
+                    # Without a base path the document is the file plus fingerprinted asset URLs.
+                    self.assertEqual(body, server.render_document(document))
+                    self.assertIn(f'href="/dashboard.css?v={server.asset_version("dashboard.css")}"'.encode(), body)
+                    self.assertIn(f'src="/dashboard.js?v={server.asset_version("dashboard.js")}"'.encode(), body)
                     self.assertIn(DASHBOARD_MARKER, body)
                     for marker in EXPLORER_MARKERS:
                         self.assertNotIn(marker, body)
@@ -220,7 +222,7 @@ class HTTPIntegrationTests(unittest.TestCase):
         status, headers, body = self.request("/about")
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("content-type"), "text/html; charset=utf-8")
-        self.assertEqual(body, (server.ROOT / "dashboard.html").read_bytes())
+        self.assertEqual(body, server.render_document("dashboard.html"))
         for marker in ABOUT_MARKERS:
             with self.subTest(marker=marker):
                 self.assertIn(marker, body)
@@ -919,8 +921,8 @@ class BasePathTests(unittest.TestCase):
                 status, _, body = self.request(path)
                 self.assertEqual(status, 200)
                 text = body.decode("utf-8")
-                self.assertIn('src="/13f/dashboard.js"', text)
-                self.assertIn('href="/13f/dashboard.css"', text)
+                self.assertIn(f'src="/13f/dashboard.js?v={server.asset_version("dashboard.js")}"', text)
+                self.assertIn(f'href="/13f/dashboard.css?v={server.asset_version("dashboard.css")}"', text)
                 self.assertIn('id="dashLogo" class="dash-logo" href="/13f/"', text)
                 self.assertIn('href="/13f/initiations"', text)
                 self.assertIn('href="/13f/movers"', text)

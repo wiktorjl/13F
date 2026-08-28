@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import hashlib
 import json
 import sqlite3
@@ -448,6 +449,7 @@ class BasePathHelperTests(unittest.TestCase):
             (root / "index.html").write_text('<script src="/app.js"></script>', encoding="utf-8")
             with mock.patch.object(server, "ROOT", root):
                 with mock.patch.object(server, "BASE_PATH", ""):
+                    # No asset files in this root, so nothing is fingerprinted and nothing is prefixed.
                     self.assertEqual(server.render_document("dashboard.html"), source.encode("utf-8"))
                 with mock.patch.object(server, "BASE_PATH", "/13f"):
                     rendered = server.render_document("dashboard.html").decode("utf-8")
@@ -475,8 +477,8 @@ class BasePathHelperTests(unittest.TestCase):
                 server.render_document(name)
         with mock.patch.object(server, "BASE_PATH", "/13f"):
             dashboard = server.render_document("dashboard.html").decode("utf-8")
-            self.assertIn('src="/13f/dashboard.js"', dashboard)
-            self.assertIn('href="/13f/dashboard.css"', dashboard)
+            self.assertIn(f'src="/13f/dashboard.js?v={server.asset_version("dashboard.js")}"', dashboard)
+            self.assertIn(f'href="/13f/dashboard.css?v={server.asset_version("dashboard.css")}"', dashboard)
             self.assertIn('id="dashLogo" class="dash-logo" href="/13f/"', dashboard)
             self.assertIn('href="/13f/initiations"', dashboard)
             self.assertIn('href="/13f/movers"', dashboard)
@@ -484,7 +486,35 @@ class BasePathHelperTests(unittest.TestCase):
             self.assertNotIn("//13f", dashboard)
             self.assertIn('href="data:image/svg+xml,', dashboard)
         with mock.patch.object(server, "BASE_PATH", ""):
-            self.assertEqual(server.render_document("dashboard.html"), (server.ROOT / "dashboard.html").read_bytes())
+            rendered = server.render_document("dashboard.html").decode("utf-8")
+            css, js = server.asset_version("dashboard.css"), server.asset_version("dashboard.js")
+            self.assertIn(f'href="/dashboard.css?v={css}"', rendered)
+            self.assertIn(f'src="/dashboard.js?v={js}"', rendered)
+            self.assertEqual(rendered.replace(f"?v={css}", "").replace(f"?v={js}", ""),
+                             (server.ROOT / "dashboard.html").read_text(encoding="utf-8"))
+
+    def test_asset_versions_are_content_hashes_that_follow_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dashboard.html").write_text(
+                '<link rel="stylesheet" href="/dashboard.css"><script src="/dashboard.js"></script>'
+                '<a href="/dashboard.js/x">not an asset</a>', encoding="utf-8")
+            (root / "dashboard.css").write_text("a{}", encoding="utf-8")
+            with mock.patch.object(server, "ROOT", root), mock.patch.dict(server._asset_versions, clear=True):
+                first = server.asset_version("dashboard.css")
+                self.assertEqual(first, hashlib.sha256(b"a{}").hexdigest()[:12])
+                self.assertEqual(server.asset_version("dashboard.js"), "")  # absent asset: no version
+                for base, prefix in (("", ""), ("/13f", "/13f")):
+                    with mock.patch.object(server, "BASE_PATH", base):
+                        rendered = server.render_document("dashboard.html").decode("utf-8")
+                        self.assertIn(f'href="{prefix}/dashboard.css?v={first}"', rendered)
+                        self.assertIn(f'src="{prefix}/dashboard.js"', rendered)
+                        self.assertIn(f'href="{prefix}/dashboard.js/x"', rendered)
+                (root / "dashboard.css").write_text("b{}", encoding="utf-8")
+                os.utime(root / "dashboard.css", ns=(1, 1))  # force a different mtime even on fast filesystems
+                second = server.asset_version("dashboard.css")
+                self.assertNotEqual(first, second)
+                self.assertEqual(second, hashlib.sha256(b"b{}").hexdigest()[:12])
 
 
 if __name__ == "__main__":

@@ -120,26 +120,52 @@ def request_path(path: str) -> str:
     return path
 
 
-def render_document(name: str) -> bytes:
-    """Read dashboard.html, prefixing root-absolute href/src values under BASE_PATH.
+FINGERPRINTED_ASSETS = frozenset({"/dashboard.js", "/dashboard.css"})
+_asset_versions: dict[str, tuple[tuple[int, int], str]] = {}
 
-    Only values that start with exactly one slash are rewritten: protocol-relative
-    ``//host``, ``data:`` URLs, relative queries, and values already carrying the
-    prefix are left alone.  Without a prefix the file bytes are served verbatim.
+
+def asset_version(name: str) -> str:
+    """Short content hash of a static asset, cached by size and mtime; '' when the file is absent.
+
+    Appended as ``?v=`` to the asset URLs in the served HTML so a new deployment
+    never shows a stylesheet or script that a browser or CDN cached earlier.
+    """
+    path = ROOT / name
+    try:
+        stat = path.stat()
+        key = (stat.st_size, stat.st_mtime_ns)
+        cached = _asset_versions.get(name)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        version = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return ""
+    _asset_versions[name] = (key, version)
+    return version
+
+
+def render_document(name: str) -> bytes:
+    """Read dashboard.html, fingerprinting its assets and prefixing root-absolute values under BASE_PATH.
+
+    ``/dashboard.js`` and ``/dashboard.css`` gain ``?v=<content hash>``; every other
+    value that starts with exactly one slash gains the prefix when BASE_PATH is set.
+    Protocol-relative ``//host``, ``data:`` URLs, relative queries, and values already
+    carrying the prefix are left alone.  The static allowlist ignores query strings.
     """
     if name not in HTML_DOCUMENTS:
         raise ValueError(f"Not a served document: {name}")
     raw = (ROOT / name).read_bytes()
-    if not BASE_PATH:
-        return raw
 
-    def prefix(match: re.Match) -> str:
+    def rewrite(match: re.Match) -> str:
         attribute, value = match.group(1), match.group(2)
-        if value.startswith("//") or value == BASE_PATH or value.startswith(BASE_PATH + "/"):
+        if value.startswith("//") or value == BASE_PATH or (BASE_PATH and value.startswith(BASE_PATH + "/")):
             return match.group(0)
+        if value in FINGERPRINTED_ASSETS:
+            version = asset_version(value[1:])
+            return f'{attribute}="{BASE_PATH}{value}{"?v=" + version if version else ""}"'
         return f'{attribute}="{BASE_PATH}{value}"'
 
-    return ROOT_RELATIVE_ATTRIBUTE.sub(prefix, raw.decode("utf-8")).encode("utf-8")
+    return ROOT_RELATIVE_ATTRIBUTE.sub(rewrite, raw.decode("utf-8")).encode("utf-8")
 
 
 EMPTY_PRICE_SCHEMA = """
