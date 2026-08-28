@@ -19,6 +19,10 @@ html {
   text-size-adjust: 100%;
 }
 body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100svh;
   margin: 0;
   overflow-x: clip;
   background: var(--bg);
@@ -33,10 +37,13 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
 }
 
 .dash-header,
-.dash-main {
+.dash-main,
+.dash-footer {
+  width: 100%;
   max-width: 720px;
   margin: 0 auto;
 }
+.dash-main { flex: 1 0 auto; }
 
 /* Header: logo left, plain-text view links after it */
 .dash-header {
@@ -239,6 +246,21 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
   pointer-events: none;
   cursor: default;
 }
+
+.dash-footer {
+  flex: 0 0 auto;
+  padding: 24px 16px;
+  color: var(--accent);
+  font-size: 14px;
+}
+.dash-footer a {
+  color: inherit;
+  text-decoration: none;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+}
+.dash-footer a:hover,
+.dash-footer a:focus-visible { text-decoration: underline; }
 
 /* About: plain running text in the same column and the same two sizes (16px body, 16px bold heading);
    no rules, cards or boxes. */
