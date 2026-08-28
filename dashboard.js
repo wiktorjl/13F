@@ -9,8 +9,8 @@ const MAX_PAGE = 100000;
 // so one build works at any mount point. Every history URL and API request carries it.
 const BASE_PATH = new URL(document.currentScript?.src ?? '/', location.href).pathname.replace(/\/[^/]*$/, '');
 // The dashboard is the landing page: holdings at the root, the other views one segment below it. The root
-// view's URL is BASE_PATH + '/' ('/' when unprefixed); the explorer lives at BASE_PATH + '/explorer'.
-const VIEW_ROUTES = {holdings: '', initiations: '/initiations', movers: '/movers'};
+// view's URL is BASE_PATH + '/' ('/' when unprefixed). About is a static page: it carries no query state.
+const VIEW_ROUTES = {holdings: '', initiations: '/initiations', movers: '/movers', about: '/about'};
 // Pre-landing-page URLs still resolve (the server serves them too) but are never emitted.
 const LEGACY_ROUTE_VIEWS = {'/dashboard': 'holdings', '/dashboard/initiations': 'initiations', '/dashboard/movers': 'movers'};
 const ROUTE_VIEWS = {
@@ -20,7 +20,7 @@ const ROUTE_VIEWS = {
 const VIEW_PATHS = Object.fromEntries(Object.entries(VIEW_ROUTES).map(([view, path]) => [view, BASE_PATH + (path || '/')]));
 // Securities without a ticker are hidden unless the URL says ?unmapped=include (a documented switch, no control).
 const UNMAPPED_VALUES = new Set(['exclude', 'include']);
-const VIEW_TITLES = {holdings: 'Top Holdings', initiations: 'Fresh Initiations', movers: 'Top Movers'};
+const VIEW_TITLES = {holdings: 'Top Holdings', initiations: 'Fresh Initiations', movers: 'Top Movers', about: 'About'};
 const SIDES = new Set(['gainers', 'losers']);
 // Sort column -> the direction selected when the column is first clicked. The metric column starts at the view's
 // own default (viewDirection), which is also the direction the URL and the API assume when none is given.
@@ -44,9 +44,14 @@ const NAME_TOKENS = new Map([
   ['SPA', 'SpA'], ['NA', 'NA'], ['DE', 'DE'], ['DEL', 'Del'], ['TR', 'Tr'], ['FD', 'Fd'], ['FDS', 'Fds']
 ]);
 
-const state = {view: 'holdings', horizon: 1, side: 'gainers', sort: 'metric', direction: 'desc', page: 1, unmapped: 'exclude', count: 0, requestId: 0};
+// `meta` caches the one /api/meta response the About page needs (null until it has arrived successfully).
+const state = {view: 'holdings', horizon: 1, side: 'gainers', sort: 'metric', direction: 'desc', page: 1, unmapped: 'exclude', count: 0, requestId: 0, meta: null};
 
 const fmtInt = new Intl.NumberFormat('en-US', {maximumFractionDigits: 0});
+const MONTHS = new Map([
+  ['JAN', 'Jan'], ['FEB', 'Feb'], ['MAR', 'Mar'], ['APR', 'Apr'], ['MAY', 'May'], ['JUN', 'Jun'], ['JUL', 'Jul'],
+  ['AUG', 'Aug'], ['SEP', 'Sep'], ['OCT', 'Oct'], ['NOV', 'Nov'], ['DEC', 'Dec']
+]);
 const fmtMoney = new Intl.NumberFormat('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, character => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'}[character]));
 const toNumber = (value) => {
@@ -128,10 +133,11 @@ function rowHtml(row, view) {
   </tr>`;
 }
 
-async function api(path, params) {
+async function api(path, params = '') {
+  const query = String(params);
   let response;
   try {
-    response = await fetch(`${BASE_PATH}${path}?${params}`);
+    response = await fetch(`${BASE_PATH}${path}${query ? `?${query}` : ''}`);
   } catch (_) {
     throw new Error('unreachable');
   }
@@ -160,14 +166,18 @@ function unprefixedPath(pathname) {
   return (prefixed ? pathname.slice(BASE_PATH.length) : pathname) || '/';
 }
 
-// The view named by a path: the root, '/initiations', '/movers', or a legacy '/dashboard…' alias. Anything
-// else, including a trailing slash on a sub-path, is the holdings default.
+// The view named by a path: the root, '/initiations', '/movers', '/about', or a legacy '/dashboard…' alias.
+// Anything else, including a trailing slash on a sub-path, is the holdings default.
 function viewFromPath(pathname) {
   return ROUTE_VIEWS[unprefixedPath(pathname)] || 'holdings';
 }
 
+// The About page has no query state: whatever the URL carries is ignored and never re-emitted.
+const ABOUT_ROUTE = {view: 'about', horizon: 1, side: 'gainers', sort: 'metric', direction: 'desc', page: 1, unmapped: 'exclude'};
+
 function routeFromUrl(url = new URL(location.href)) {
   const view = viewFromPath(url.pathname);
+  if (view === 'about') return {...ABOUT_ROUTE};
   const params = url.searchParams;
   const movers = view === 'movers';
   const route = {
@@ -184,6 +194,7 @@ function routeFromUrl(url = new URL(location.href)) {
 }
 
 function routeUrl(route) {
+  if (route.view === 'about') return VIEW_PATHS.about;
   const params = new URLSearchParams();
   if (route.view === 'movers') {
     if (route.horizon !== 1) params.set('horizon', String(route.horizon));
@@ -226,12 +237,22 @@ function setActive(link, active) {
 }
 
 function renderChrome() {
+  const about = state.view === 'about';
   document.title = `13F Dashboard — ${VIEW_TITLES[state.view]}`;
   $('#dashLogo').href = routeUrl(viewRoute('holdings'));
   $$('#dashNav a').forEach(link => {
     setActive(link, link.dataset.view === state.view);
     link.href = routeUrl(viewRoute(link.dataset.view));
   });
+  // About replaces the table and everything around it; the table chrome comes back on the next view change.
+  $('#dashAbout').hidden = !about;
+  $('#dashTable').hidden = about;
+  if (about) {
+    $('#dashControls').hidden = true;
+    $('#dashStatus').hidden = true;
+    $('#dashPager').hidden = true;
+    return;
+  }
   $('#dashControls').hidden = state.view !== 'movers';
   $$('#dashSide a').forEach(link => {
     setActive(link, link.dataset.side === state.side);
@@ -296,8 +317,51 @@ function renderRows(data) {
   renderPager();
 }
 
+// "31-MAR-2026" (the period label) -> "31 Mar 2026"; anything else is shown as given.
+function fmtPeriod(label) {
+  const match = /^(\d{1,2})-([A-Z]{3})-(\d{4})$/i.exec(String(label ?? '').trim());
+  const month = match && MONTHS.get(match[2].toUpperCase());
+  return month ? `${Number(match[1])} ${month} ${match[3]}` : String(label ?? '—');
+}
+
+// "about 8,700": the latest quarter's manager count rounded to the nearest hundred.
+const fmtManagers = (value) => value == null ? '—' : `about ${fmtInt.format(Math.round(value / 100) * 100)}`;
+
+function renderAbout(meta) {
+  const periods = Array.isArray(meta?.periods) ? meta.periods.filter(period => period && period.label) : [];
+  const dated = periods.filter(period => period.period_date).sort((a, b) => String(a.period_date).localeCompare(String(b.period_date)));
+  const first = dated[0] ?? periods[periods.length - 1];
+  const last = dated[dated.length - 1] ?? periods[0];
+  const quarters = periods.length || toNumber(meta?.period_count);
+  $('#aboutQuarters').textContent = quarters ? fmtInt.format(quarters) : '—';
+  $('#aboutSpan').textContent = first && last ? `${fmtPeriod(first.label)} to ${fmtPeriod(last.label)}` : '—';
+  $('#aboutManagers').textContent = fmtManagers(toNumber(meta?.distinct_managers));
+}
+
+// /api/meta is fetched once and kept; a failed fetch leaves the dashes in place and is retried on the next visit.
+async function loadAbout() {
+  if (state.meta) {
+    renderAbout(state.meta);
+    return;
+  }
+  renderAbout(null);
+  let meta;
+  try {
+    meta = await api('/api/meta');
+  } catch (_) {
+    return;
+  }
+  state.meta = meta;
+  renderAbout(meta);
+}
+
 async function load() {
+  // Bumping the request id also drops any row response still in flight when About takes over.
   const requestId = ++state.requestId;
+  if (state.view === 'about') {
+    loadAbout();
+    return;
+  }
   const params = new URLSearchParams({view: state.view});
   if (state.view === 'movers') {
     params.set('horizon', String(state.horizon));

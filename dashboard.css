@@ -201,6 +201,20 @@ a { color: inherit; }
   cursor: default;
 }
 
+/* About: plain running text in the same column and the same two sizes (16px body, 16px bold heading);
+   no rules, cards or boxes. */
+.dash-about {
+  padding: 12px 16px 24px;
+  font-size: 16px;
+}
+.dash-about h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.dash-about p { margin: 0 0 12px; }
+.dash-about p:last-child { margin-bottom: 0; }
+
 /* Narrow screens: two lines per row, never a horizontal page scroll. The table collapses to blocks and each
    row becomes the two-line grid; the header row uses the same areas so labels sit where values sit. */
 @media (max-width: 639.98px) {

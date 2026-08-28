@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full-data UI walkthrough using Chromium's DevTools protocol and only stdlib."""
+"""Full-data dashboard walkthrough using Chromium's DevTools protocol and only stdlib."""
 
 from __future__ import annotations
 
@@ -412,20 +412,6 @@ class CDP:
             }})()"""
         )
 
-    def input(self, selector: str, value: str, event: str = "input") -> None:
-        quoted_selector = json.dumps(selector)
-        quoted_value = json.dumps(value)
-        self.evaluate(
-            f"""(() => {{
-              const element = document.querySelector({quoted_selector});
-              if (!element) throw new Error('Missing input: ' + {quoted_selector});
-              element.focus();
-              element.value = {quoted_value};
-              element.dispatchEvent(new Event({json.dumps(event)}, {{bubbles: true}}));
-              return element.value;
-            }})()"""
-        )
-
     def screenshot(self, path: Path) -> None:
         result = self.command(
             "Page.captureScreenshot",
@@ -457,126 +443,19 @@ class UIWalkthrough:
         action()
         self.steps.append({"name": name, "seconds": round(time.monotonic() - started, 3)})
 
-    def table_ready(self, panel: str, body: str, summary: str) -> None:
-        expression = f"""(() => {{
-          const panel = document.querySelector({json.dumps(panel)});
-          const body = document.querySelector({json.dumps(body)});
-          const summary = document.querySelector({json.dumps(summary)});
-          return Boolean(panel && !panel.hidden && body && body.closest('.table-wrap')?.getAttribute('aria-busy') === 'false'
-            && body.querySelector('tr') && summary && !/loading|could not/i.test(summary.textContent));
-        }})()"""
-        self.cdp.wait_for(f"{panel} table", expression)
-
-    def viewport_check(self, name: str, width: int, height: int, mobile: bool) -> None:
-        self.cdp.command(
-            "Emulation.setDeviceMetricsOverride",
-            {
-                "width": width,
-                "height": height,
-                "deviceScaleFactor": 1,
-                # A responsive CSS viewport stays deterministic when switching
-                # after desktop interactions. Touch emulation supplies the
-                # phone input model without Chromium's legacy 980px layout
-                # viewport transition.
-                "mobile": False,
-                "screenWidth": width,
-                "screenHeight": height,
-            },
-        )
+    def set_viewport(self, width: int, height: int, mobile: bool) -> None:
+        # A responsive CSS viewport stays deterministic when switching after
+        # desktop interactions: keep Chromium's layout viewport fixed and
+        # supply the phone input model through touch emulation instead.
         # Always set touch state explicitly so a desktop check never inherits
         # the phone input model from an earlier mobile step.
+        self.cdp.command(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False,
+             "screenWidth": width, "screenHeight": height},
+        )
         self.cdp.command("Emulation.setTouchEmulationEnabled",
                          {"enabled": True, "maxTouchPoints": 1} if mobile else {"enabled": False})
-        if mobile:
-            # Reload the current route so responsive initialization is checked,
-            # rather than only resizing the already-rendered desktop DOM.
-            mark = len(self.cdp.responses)
-            self.cdp.command("Page.reload", {"ignoreCache": True})
-            self.cdp.wait_for("mobile document readiness", "document.readyState === 'complete'")
-            self.cdp.wait_for_api("/api/meta", mark)
-            self.cdp.wait_for_api("/api/holdings", mark)
-            self.table_ready("#holdings", "#holdingsBody", "#rowSummary")
-        self.cdp.wait_for(f"{name} viewport width", f"window.innerWidth === {width}")
-        result = self.cdp.evaluate(
-            """(() => {
-              const visible = element => element && !element.hidden && element.getClientRects().length;
-              const originalWindowX = window.scrollX;
-              window.scrollTo(1000000, window.scrollY);
-              const horizontalScrollReach = window.scrollX;
-              window.scrollTo(originalWindowX, window.scrollY);
-              const tableScroller = document.querySelector('#holdings .table-wrap');
-              const originalTableX = tableScroller?.scrollLeft || 0;
-              if (tableScroller) tableScroller.scrollLeft = tableScroller.scrollWidth;
-              const tableScrollReach = tableScroller?.scrollLeft || 0;
-              if (tableScroller) tableScroller.scrollLeft = originalTableX;
-              const selectors = ['#mainContent', '.view-navigation:not([hidden])', '#sharedFilters:not([hidden])', '.results'];
-              const boxes = selectors.map(selector => {
-                const element = document.querySelector(selector);
-                if (!visible(element)) return {selector, skipped: true};
-                const rect = element.getBoundingClientRect();
-                return {selector, left: rect.left, right: rect.right, width: rect.width,
-                  fits: rect.left >= -1 && rect.right <= innerWidth + 1};
-              });
-              const tabs = [...document.querySelectorAll('.tabs [role=tab]')].map(element => {
-                const rect = element.getBoundingClientRect();
-                return {id: element.id, width: rect.width, height: rect.height};
-              });
-              const overflowers = [...document.querySelectorAll('body *')].map(element => {
-                const rect = element.getBoundingClientRect();
-                let ancestor = element.parentElement;
-                let clippedBy = null;
-                while (ancestor && ancestor !== document.body) {
-                  const overflow = getComputedStyle(ancestor).overflowX;
-                  if (['auto', 'scroll', 'hidden', 'clip'].includes(overflow)) {
-                    clippedBy = ancestor.id ? `#${ancestor.id}` : `${ancestor.tagName.toLowerCase()}.${ancestor.className}`;
-                    break;
-                  }
-                  ancestor = ancestor.parentElement;
-                }
-                return {element: element.id ? `#${element.id}` : `${element.tagName.toLowerCase()}.${element.className}`,
-                  left: rect.left, right: rect.right, width: rect.width, clippedBy};
-              }).filter(item => (item.left < -1 || item.right > innerWidth + 1) && !item.clippedBy).slice(0, 25);
-              const farthestRects = [...document.querySelectorAll('body *')].map(element => {
-                const rect = element.getBoundingClientRect();
-                return {element: element.id ? `#${element.id}` : `${element.tagName.toLowerCase()}.${element.className}`,
-                  left: rect.left, right: rect.right, width: rect.width};
-              }).sort((a, b) => b.right - a.right).slice(0, 12);
-              const scrollWidths = [...document.querySelectorAll('body *')].filter(element =>
-                element.scrollWidth > element.clientWidth + 1).map(element => ({
-                  element: element.id ? `#${element.id}` : `${element.tagName.toLowerCase()}.${element.className}`,
-                  clientWidth: element.clientWidth, scrollWidth: element.scrollWidth,
-                  overflowX: getComputedStyle(element).overflowX,
-                })).slice(0, 20);
-              return {
-                innerWidth, innerHeight,
-                clientWidth: document.documentElement.clientWidth,
-                documentWidth: document.documentElement.scrollWidth,
-                horizontalScrollReach,
-                noPageOverflow: horizontalScrollReach <= 1,
-                tableScrollReach,
-                innerTableScrolls: Boolean(tableScroller && tableScroller.scrollWidth > tableScroller.clientWidth
-                  && tableScrollReach > 1 && ['auto', 'scroll'].includes(getComputedStyle(tableScroller).overflowX)),
-                boxes,
-                boxesFit: boxes.every(box => box.skipped || box.fits),
-                overflowers,
-                farthestRects,
-                scrollWidths,
-                activeElement: document.activeElement?.id || `${document.activeElement?.tagName}.${document.activeElement?.className}`,
-                tabsUsable: tabs.every(tab => tab.width > 0 && tab.height > 0),
-                errorHidden: Boolean(document.querySelector('#errorToast')?.hidden),
-              };
-            })()"""
-        )
-        self.viewports[name] = result
-        if self.screenshot_dir is not None:
-            screenshot = self.screenshot_dir / f"chromium-{name}.png"
-            self.cdp.screenshot(screenshot)
-            self.screenshots[name] = str(screenshot.resolve())
-        if (result["innerWidth"] != width or not result["noPageOverflow"]
-                or not result["boxesFit"] or not result["innerTableScrolls"]):
-            self.viewport_failures.append(f"{name} viewport has horizontal overflow or clipped layout: {result}")
-        if not result["tabsUsable"] or not result["errorHidden"]:
-            self.viewport_failures.append(f"{name} viewport has unusable navigation or a visible error: {result}")
 
     def dashboard_ready(self, view: str) -> None:
         """Rows rendered for the view, its nav link active, and the status line (loading/error/empty) hidden."""
@@ -589,22 +468,21 @@ class UIWalkthrough:
         }})()"""
         self.cdp.wait_for(f"dashboard {view} rows", expression)
 
-    def dashboard_viewport_check(self, name: str, width: int, height: int, mobile: bool) -> None:
-        self.cdp.command(
-            "Emulation.setDeviceMetricsOverride",
-            {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False,
-             "screenWidth": width, "screenHeight": height},
-        )
-        self.cdp.command("Emulation.setTouchEmulationEnabled",
-                         {"enabled": True, "maxTouchPoints": 1} if mobile else {"enabled": False})
+    def dashboard_viewport_check(self, name: str, width: int, height: int, mobile: bool, *,
+                                 view: str, expected: dict[str, str]) -> None:
+        """Measure horizontal overflow at a viewport; a mobile check first reloads the current route.
+
+        ``view``/``expected`` describe the route the page is on so the reload can
+        wait for its API request and rendered rows (the reload checks responsive
+        initialization, not only a resized desktop DOM).
+        """
+        self.set_viewport(width, height, mobile)
         if mobile:
-            # Reload the current movers route so responsive initialization is
-            # checked, not only a resized desktop DOM.
             mark = len(self.cdp.responses)
             self.cdp.command("Page.reload", {"ignoreCache": True})
             self.cdp.wait_for("dashboard mobile document readiness", "document.readyState === 'complete'")
-            self.cdp.wait_for_api("/api/dashboard", mark, {"view": "movers", "horizon": "2", "side": "losers"})
-            self.dashboard_ready("movers")
+            self.cdp.wait_for_api("/api/dashboard", mark, expected)
+            self.dashboard_ready(view)
         self.cdp.wait_for(f"dashboard {name} viewport width", f"window.innerWidth === {width}")
         result = self.cdp.evaluate(
             """(() => {
@@ -613,7 +491,7 @@ class UIWalkthrough:
               const horizontalScrollReach = window.scrollX;
               window.scrollTo(originalX, window.scrollY);
               const describe = element => element.id ? `#${element.id}` : `${element.tagName.toLowerCase()}.${element.className}`;
-              const boxes = ['.dash-header', '#dashMain', '#dashControls', '#dashRows'].map(selector => {
+              const boxes = ['.dash-header', '#dashNav', '#dashMain', '#dashControls', '#dashRows', '#dashAbout'].map(selector => {
                 const element = document.querySelector(selector);
                 if (!element || element.hidden) return {selector, skipped: true};
                 const rect = element.getBoundingClientRect();
@@ -634,6 +512,8 @@ class UIWalkthrough:
                 rowCount: document.querySelectorAll('#dashRows .dash-row').length,
                 statusHidden: Boolean(document.querySelector('#dashStatus')?.hidden),
                 controlsVisible: document.querySelector('#dashControls')?.hidden === false,
+                aboutVisible: document.querySelector('#dashAbout')?.hidden === false,
+                navLinks: [...document.querySelectorAll('#dashNav a')].map(link => link.dataset.view),
                 activeElement: document.activeElement?.id || `${document.activeElement?.tagName}.${document.activeElement?.className}`,
               };
             })()"""
@@ -645,8 +525,12 @@ class UIWalkthrough:
             self.screenshots[f"dashboard-{name}"] = str(screenshot.resolve())
         if result["innerWidth"] != width or not result["noPageOverflow"] or not result["boxesFit"]:
             self.viewport_failures.append(f"dashboard {name} viewport has horizontal overflow or clipped layout: {result}")
-        if not result["rowCount"] or not result["statusHidden"] or not result["controlsVisible"]:
-            self.viewport_failures.append(f"dashboard {name} viewport has no rows, a visible status line, or hidden controls: {result}")
+        if (not result["rowCount"] or not result["statusHidden"] or result["aboutVisible"]
+                or result["controlsVisible"] != (view == "movers")):
+            self.viewport_failures.append(
+                f"dashboard {name} viewport ({view}) has no rows, a visible status line, or the wrong panels shown: {result}")
+        if result["navLinks"] != ["holdings", "initiations", "movers", "about"]:
+            self.viewport_failures.append(f"dashboard {name} viewport has an unexpected nav: {result['navLinks']}")
 
     def dashboard_sorting(self) -> None:
         """Column headers on Top Holdings: Ticker starts ascending, a second click flips it, and the metric
@@ -691,19 +575,11 @@ class UIWalkthrough:
     def dashboard_views(self) -> None:
         """Holdings (with sorting and paging), Fresh Initiations, and Top Movers at 2Q/Losers, ending on the desktop check."""
         cdp = self.cdp
-        # The explorer mobile check runs just before this; drop its touch
-        # emulation before navigating so the new document gets the desktop
-        # input model.
-        cdp.command("Emulation.setTouchEmulationEnabled", {"enabled": False})
-        cdp.command(
-            "Emulation.setDeviceMetricsOverride",
-            {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False,
-             "screenWidth": 1440, "screenHeight": 1000},
-        )
         mark = len(cdp.responses)
         # The dashboard is the landing page: the app root serves it.
         cdp.command("Page.navigate", {"url": self.app_url})
         cdp.wait_for("dashboard document readiness", "document.readyState === 'complete'")
+        cdp.wait_for("dashboard document", "location.pathname === '/' && Boolean(document.querySelector('#dashRows'))")
         cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "page": "1", "size": "100"})
         self.dashboard_ready("holdings")
         cdp.wait_for("holdings weight metrics", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith('%'))")
@@ -711,6 +587,7 @@ class UIWalkthrough:
         # blank-ticker rendering path must not appear on the default holdings page.
         cdp.wait_for("no unmapped rows by default", "document.querySelectorAll('#dashRows .dash-missing').length === 0")
         cdp.wait_for("movers controls hidden", "document.querySelector('#dashControls')?.hidden === true")
+        cdp.wait_for("about hidden", "document.querySelector('#dashAbout')?.hidden === true")
         self.dashboard_sorting()
 
         # Paging is exercised whenever the list needs it (always on full production data).
@@ -755,7 +632,36 @@ class UIWalkthrough:
         cdp.wait_for("losers direction", "document.querySelector('#dashRows .dash-direction')?.classList.contains('down')")
         cdp.wait_for("movers metrics", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith('pp'))")
         cdp.wait_for("movers URL", "location.pathname === '/movers' && location.search === '?horizon=2&side=losers'")
-        self.dashboard_viewport_check("desktop", 1440, 1000, False)
+        self.dashboard_viewport_check("desktop", 1440, 1000, False, view="movers",
+                                      expected={"view": "movers", "horizon": "2", "side": "losers"})
+
+    def dashboard_about(self) -> None:
+        """The About tab: static copy replaces the table at /about, /api/meta fills the three numbers, and
+        Top Holdings brings the table back."""
+        cdp = self.cdp
+        cdp.click('#dashNav a[data-view="about"]')
+        cdp.wait_for("about section shown", """(() => {
+          const hidden = id => document.getElementById(id)?.hidden === true;
+          return document.querySelector('#dashAbout')?.hidden === false
+            && hidden('dashTable') && hidden('dashControls') && hidden('dashStatus') && hidden('dashPager');
+        })()""")
+        cdp.wait_for("about nav active", "Boolean(document.querySelector('#dashNav a.active[data-view=\"about\"][aria-current=\"page\"]')) && document.title === '13F Dashboard — About'")
+        cdp.wait_for("about URL", "location.pathname === '/about' && !location.search")
+        cdp.wait_for("about heading and copy", "document.querySelector('#dashAbout h2')?.textContent.trim() === 'About' && /Nothing here is investment advice\\./.test(document.querySelector('#dashAbout')?.textContent || '')")
+        # The three numbers come from /api/meta; "—" is the placeholder before it arrives.
+        cdp.wait_for("about quarter count", "/^[0-9]+$/.test(document.querySelector('#aboutQuarters')?.textContent.trim() || '')")
+        cdp.wait_for("about period span", "/^[0-9]{1,2} [A-Z][a-z]{2} [0-9]{4} to [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4}$/.test(document.querySelector('#aboutSpan')?.textContent.trim() || '')")
+        cdp.wait_for("about manager count", "/^(about )?[0-9]{1,3}(,[0-9]{3})*$/.test(document.querySelector('#aboutManagers')?.textContent.trim() || '')")
+        quarters = int(cdp.evaluate("document.querySelector('#aboutQuarters').textContent.trim()"))
+        if quarters < 1:
+            raise WalkthroughFailure(f"About tab reports {quarters} quarters")
+
+        mark = len(cdp.responses)
+        cdp.click('#dashNav a[data-view="holdings"]')
+        cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "page": "1"})
+        self.dashboard_ready("holdings")
+        cdp.wait_for("table restored after About", "document.querySelector('#dashTable')?.hidden === false && document.querySelector('#dashAbout')?.hidden === true")
+        cdp.wait_for("holdings URL after About", "location.pathname === '/' && !location.search")
 
     def run(self) -> None:
         cdp = self.cdp
@@ -764,139 +670,13 @@ class UIWalkthrough:
         cdp.command("Network.enable", {"maxTotalBufferSize": 10_000_000})
         cdp.command("Log.enable")
         cdp.command("Inspector.enable")
-        cdp.command(
-            "Emulation.setDeviceMetricsOverride",
-            {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False,
-             "screenWidth": 1440, "screenHeight": 1000},
-        )
-
-        def initial_load() -> None:
-            mark = len(cdp.responses)
-            # The explorer lives one segment below the root (the root is the dashboard).
-            cdp.command("Page.navigate", {"url": self.app_url + "explorer"})
-            cdp.wait_for("document readiness", "document.readyState === 'complete'")
-            cdp.wait_for("explorer document", "location.pathname === '/explorer' && Boolean(document.querySelector('#fundsBody'))")
-            cdp.wait_for_api("/api/meta", mark)
-            cdp.wait_for_api("/api/funds", mark)
-            self.table_ready("#funds", "#fundsBody", "#fundSummary")
-            cdp.wait_for("initial fund rows", "document.querySelectorAll('#fundsBody .fund-open').length > 0")
-            cdp.wait_for("filters collapsed by default", "document.querySelector('#sharedFilters')?.open === false")
-            cdp.wait_for("dataset span rendered", "document.querySelector('#statPeriod')?.textContent.includes('→')")
-            mark = len(cdp.responses)
-            cdp.click('#funds [data-fund-sort="signal_return"] .sort-button')
-            cdp.wait_for_api("/api/funds", mark, {"sort": "signal_return", "direction": "desc"})
-            self.table_ready("#funds", "#fundsBody", "#fundSummary")
-            cdp.wait_for("sortable fund signals", "[...document.querySelectorAll('#fundsBody tr td:nth-child(7)')].some(cell => cell.textContent.includes('%'))")
-            mark = len(cdp.responses)
-            cdp.click('#funds [data-fund-sort="value"] .sort-button')
-            cdp.wait_for_api("/api/funds", mark, {"sort": "value", "direction": "desc"})
-            self.table_ready("#funds", "#fundsBody", "#fundSummary")
-
-        self.step("Load Funds on desktop", initial_load)
-
-        def fund_detail_and_back() -> None:
-            mark = len(cdp.responses)
-            cdp.click("#fundsBody .fund-open")
-            cdp.wait_for_api("/api/fund-detail", mark)
-            self.table_ready("#detail", "#detailBody", "#detailSummary")
-            cdp.wait_for("fund detail identity", "document.querySelector('#detailTitle')?.textContent.trim().length > 1")
-            mark = len(cdp.responses)
-            cdp.click("#detailBack")
-            cdp.wait_for("return to Funds", "!document.querySelector('#funds').hidden && document.querySelector('#detail').hidden")
-            cdp.wait_for_api("/api/funds", mark)
-            self.table_ready("#funds", "#fundsBody", "#fundSummary")
-
-        self.step("Open a fund detail and return", fund_detail_and_back)
-
-        def stock_detail() -> None:
-            mark = len(cdp.responses)
-            cdp.click("#tab-securities")
-            cdp.wait_for_api("/api/aggregate", mark, {"group": "issuer"})
-            self.table_ready("#overview", "#breakdownBody", "#breakdownSummary")
-            cdp.wait_for("stock links", "document.querySelectorAll('#breakdownBody .stock-open').length > 0")
-            mark = len(cdp.responses)
-            cdp.click("#breakdownBody .stock-open")
-            cdp.wait_for_api("/api/stock-detail", mark)
-            self.table_ready("#detail", "#detailBody", "#detailSummary")
-            cdp.wait_for("stock detail identity", "document.querySelector('#detailSubtitle')?.textContent.includes('CUSIP')")
-            cdp.click("#detailBack")
-            cdp.wait_for("return to Stocks", "!document.querySelector('#overview').hidden && document.querySelector('#detail').hidden")
-
-        self.step("Open a stock detail from Stocks", stock_detail)
-
-        def quarterly_changes() -> None:
-            mark = len(cdp.responses)
-            cdp.click("#tab-netadds")
-            cdp.wait_for_api("/api/net-adds", mark, {"metric": "value"})
-            self.table_ready("#netadds", "#netBody", "#netSummary")
-            cdp.wait_for("quarterly change rows", "document.querySelectorAll('#netBody .stock-open').length > 0")
-            for metric in ("portfolio", "position"):
-                mark = len(cdp.responses)
-                cdp.click(f'[name="netMetric"][value="{metric}"]')
-                cdp.wait_for_api("/api/net-adds", mark, {"metric": metric})
-                self.table_ready("#netadds", "#netBody", "#netSummary")
-                if cdp.evaluate(f'document.querySelector(\'[name="netMetric"][value="{metric}"]\').checked') is not True:
-                    raise WalkthroughFailure(f"Quarterly metric {metric} did not remain selected")
-
-            mark = len(cdp.responses)
-            cdp.click('#netHead [data-net-sort="issuer"] .sort-button')
-            cdp.wait_for_api("/api/net-adds", mark, {"sort": "issuer", "direction": "asc"})
-            self.table_ready("#netadds", "#netBody", "#netSummary")
-            query = cdp.evaluate(
-                """(() => [...document.querySelectorAll('#netBody .ticker-symbol')]
-                  .map(node => node.textContent.trim()).find(value => value && value !== '—')
-                  || document.querySelector('#netBody .stock-open')?.dataset.cusip?.slice(0, 3))()"""
-            )
-            if not query:
-                raise WalkthroughFailure("Could not derive a quarterly-change filter from rendered data")
-            mark = len(cdp.responses)
-            cdp.input("#netSearch", str(query))
-            cdp.wait_for_api("/api/net-adds", mark, {"stock_q": str(query)})
-            self.table_ready("#netadds", "#netBody", "#netSummary")
-
-        self.step("Change quarterly metrics, sort, and filter", quarterly_changes)
-
-        def positions() -> None:
-            mark = len(cdp.responses)
-            cdp.click("#tab-holdings")
-            cdp.wait_for_api("/api/holdings", mark, {"page": "1"})
-            self.table_ready("#holdings", "#holdingsBody", "#rowSummary")
-            cdp.wait_for("position rows", "document.querySelectorAll('#holdingsBody .stock-open').length > 0")
-            self.viewport_check("desktop", 1440, 1000, False)
-
-            mark = len(cdp.responses)
-            cdp.click('#holdings [data-sort="issuer"] .sort-button')
-            cdp.wait_for_api("/api/holdings", mark, {"sort": "issuer_asc"})
-            self.table_ready("#holdings", "#holdingsBody", "#rowSummary")
-
-            if cdp.evaluate("document.querySelector('#nextPage').disabled") is True:
-                raise WalkthroughFailure("Full production Positions data did not provide a second page")
-            mark = len(cdp.responses)
-            cdp.click("#nextPage")
-            cdp.wait_for_api("/api/holdings", mark, {"page": "2"})
-            self.table_ready("#holdings", "#holdingsBody", "#rowSummary")
-            cdp.wait_for("Positions page 2 label", "document.querySelector('#pageInfo')?.textContent.startsWith('Page 2')")
-
-            query = cdp.evaluate(
-                """(() => [...document.querySelectorAll('#holdingsBody .ticker-symbol')]
-                  .map(node => node.textContent.trim()).find(value => value && value !== '—')
-                  || document.querySelector('#holdingsBody .stock-open')?.dataset.cusip?.slice(0, 6))()"""
-            )
-            if not query:
-                raise WalkthroughFailure("Could not derive a Positions filter from rendered data")
-            mark = len(cdp.responses)
-            cdp.input('[name="q"]', str(query))
-            cdp.evaluate("document.querySelector('#filtersForm').requestSubmit(); true")
-            cdp.wait_for_api("/api/holdings", mark, {"q": str(query), "page": "1"})
-            self.table_ready("#holdings", "#holdingsBody", "#rowSummary")
-            cdp.wait_for("active filter status", "document.querySelector('#activeFilterCount')?.textContent.startsWith('1 active filter')")
-            cdp.wait_for("filtered positions", "document.querySelectorAll('#holdingsBody .stock-open').length > 0")
-
-        self.step("Sort, page, and filter Positions", positions)
-        self.step("Check the mobile viewport", lambda: self.viewport_check("mobile", 390, 844, True))
+        self.set_viewport(1440, 1000, False)
 
         self.step("Browse the dashboard views", self.dashboard_views)
-        self.step("Check the dashboard mobile viewport", lambda: self.dashboard_viewport_check("mobile", 375, 812, True))
+        self.step("Open the About tab and return", self.dashboard_about)
+        self.step("Check the dashboard mobile viewport",
+                  lambda: self.dashboard_viewport_check("mobile", 375, 812, True, view="holdings",
+                                                        expected={"view": "holdings", "page": "1"}))
 
         cdp.evaluate("true")
         if cdp.console_failures or cdp.page_failures or cdp.network_failures or self.viewport_failures:

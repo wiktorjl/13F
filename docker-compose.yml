@@ -1,4 +1,4 @@
-# 13F Explorer behind Traefik at https://soto.wiktor.io/13f
+# 13F Dashboard behind Traefik at https://soto.wiktor.io/13f
 #
 # The container serves the app under BASE_PATH itself, so Traefik forwards the
 # request path unchanged and no stripprefix middleware is required.

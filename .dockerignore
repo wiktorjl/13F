@@ -1,4 +1,4 @@
-# Build context for the 13F Explorer image. The Dockerfile copies an explicit
+# Build context for the 13F Dashboard image. The Dockerfile copies an explicit
 # file list, but excluding these keeps the context small (the archives alone
 # are ~1 GB and data/ ~2 GB) and keeps derived caches out of the image.
 *_form13f.zip

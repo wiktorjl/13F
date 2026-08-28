@@ -34,50 +34,21 @@ class ParameterHelperTests(unittest.TestCase):
             server.enum_param({"kind": ["c"]}, "kind", {"a", "b"})
         self.assertEqual(server.page_params({}), (1, 50))
         self.assertEqual(server.page_params({"page": ["2"], "size": ["10"]}), (2, 10))
+        for params in ({"page": ["0"]}, {"page": [str(server.MAX_PAGE + 1)]}, {"size": ["9"]}, {"size": ["201"]}):
+            with self.subTest(params=params), self.assertRaises(ValueError):
+                server.page_params(params)
 
-    def test_direction_and_literal_like_escaping(self) -> None:
-        self.assertEqual(server.direction_sql({"direction": ["asc"]}), "ASC")
-        self.assertEqual(server.direction_sql({}), "DESC")
-        with self.assertRaises(ValueError):
-            server.direction_sql({"direction": ["sideways"]})
-        self.assertEqual(server.like_value(r"50%_off\today"), r"%50\%\_off\\today%")
-        self.assertEqual(server.like_value("ABC", prefix=True), "ABC%")
-
-    def test_nonnegative_bounds_and_range_validation(self) -> None:
-        self.assertIsNone(server.nonnegative_bound({}, "amount"))
-        self.assertEqual(server.nonnegative_bound({"amount": ["1.25"]}, "amount"), 1.25)
-        self.assertEqual(server.nonnegative_bound({"amount": ["12"]}, "amount", integer=True), 12)
-        for raw in ("-1", "nan", "inf", str(server.MAX_SQLITE_INTEGER + 1)):
-            with self.subTest(raw=raw), self.assertRaises(ValueError):
-                server.nonnegative_bound({"amount": [raw]}, "amount")
-        with self.assertRaises(ValueError):
-            server.nonnegative_bound({"amount": ["1.5"]}, "amount", integer=True)
-        server.validate_range(None, 1, "amount")
-        server.validate_range(1, 1, "amount")
-        with self.assertRaisesRegex(ValueError, "Minimum amount"):
-            server.validate_range(2, 1, "amount")
-
-    def test_period_helpers_use_date_order_and_default_latest(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = create_fixture_database(Path(directory) / "fixture.sqlite")
-            with closing(sqlite3.connect(path)) as con:
-                con.row_factory = sqlite3.Row
-                self.assertEqual(server.latest_period(con), "31-DEC-2025")
-                current, previous = server.period_pair(con, "2025-12-31")
-                self.assertEqual(current["label"], "31-DEC-2025")
-                self.assertEqual(previous["label"], "30-SEP-2025")
-                params = server.default_period_params(con, {"q": ["AAPL"]})
-                self.assertEqual(params["period"], ["31-DEC-2025"])
-                self.assertEqual(params["q"], ["AAPL"])
-                with self.assertRaisesRegex(ValueError, "Unknown reporting period"):
-                    server.period_pair(con, "1900-01-01")
-
-    def test_comparison_status_sql_is_aliasable(self) -> None:
-        expression = server.comparison_status_sql("now", "before")
-        for token in ("NOT_COMPARABLE", "EXITED", "NEW", "INCREASED", "REDUCED", "UNCHANGED"):
-            self.assertIn(token, expression)
-        self.assertIn("now.manager_id", expression)
-        self.assertIn("before.manager_id", expression)
+    def test_unknown_parameters_are_rejected_with_their_names(self) -> None:
+        server.reject_unknown_params({"view": ["holdings"]}, server.API_PARAMETERS["/api/dashboard"])
+        server.reject_unknown_params({}, server.API_PARAMETERS["/api/meta"])
+        with self.assertRaisesRegex(ValueError, "Unknown query parameter: period"):
+            server.reject_unknown_params({"period": ["x"]}, server.API_PARAMETERS["/api/meta"])
+        with self.assertRaisesRegex(ValueError, "Unknown query parameters: a, b"):
+            server.reject_unknown_params({"b": ["1"], "a": ["1"], "view": ["holdings"]},
+                                         server.API_PARAMETERS["/api/dashboard"])
+        # Only the two dashboard-era endpoints exist; the explorer's are gone for good.
+        self.assertEqual(set(server.API_PARAMETERS), {"/api/meta", "/api/dashboard"})
+        self.assertEqual(server.API_PARAMETERS["/api/meta"], frozenset())
 
 
 def _price_cache(path: Path, bars: tuple[tuple[str, str, float], ...],
@@ -104,20 +75,24 @@ FIXTURE_BARS = (
 
 class DashboardHelperTests(unittest.TestCase):
     def test_static_paths_are_exact_and_dashboard_routes_share_one_page(self) -> None:
-        # The dashboard is the landing page; the explorer moved to /explorer.
+        # The dashboard is the whole site: four routes plus the legacy aliases, one document.
         self.assertEqual(server.static_path_for("/"), "/dashboard.html")
-        self.assertEqual(server.static_path_for("/explorer"), "/index.html")
-        self.assertEqual(server.DASHBOARD_ROUTES, {"/", "/initiations", "/movers"})
+        self.assertEqual(server.static_path_for("/about"), "/dashboard.html")
+        self.assertEqual(server.DASHBOARD_ROUTES, {"/", "/initiations", "/movers", "/about"})
         self.assertEqual(server.DASHBOARD_ALIASES, {"/dashboard", "/dashboard/initiations", "/dashboard/movers"})
+        self.assertEqual(server.STATIC_PATHS, {"/dashboard.html", "/dashboard.js", "/dashboard.css"})
+        self.assertEqual(server.HTML_DOCUMENTS, {"dashboard.html"})
         for route in server.DASHBOARD_ROUTES | server.DASHBOARD_ALIASES:
             with self.subTest(route=route):
                 self.assertEqual(server.static_path_for(route), "/dashboard.html")
         for member in server.STATIC_PATHS:
             self.assertEqual(server.static_path_for(member), member)
-        for path in ("/explorer/", "/explorer/x", "/Explorer", "/EXPLORER", "/initiations/", "/initiations/x",
-                     "/movers/", "/movers/x", "/Movers", "/dashboard/", "/dashboard/x", "/DASHBOARD", "/Dashboard",
-                     "/dashboard/movers/", "/dashboard.html/", "/index.html/", "/data/13f.sqlite", "/server.py",
-                     "//", "", "explorer", "/explorer.html"):
+        # The explorer and its assets are gone; trailing slashes and case variants were never routes.
+        for path in ("/explorer", "/explorer/", "/explorer/x", "/Explorer", "/index.html", "/app.js", "/styles.css",
+                     "/about/", "/about/x", "/About", "/ABOUT", "/dashboard/about", "/about.html",
+                     "/initiations/", "/initiations/x", "/movers/", "/movers/x", "/Movers", "/dashboard/",
+                     "/dashboard/x", "/DASHBOARD", "/Dashboard", "/dashboard/movers/", "/dashboard.html/",
+                     "/data/13f.sqlite", "/server.py", "//", "", "about", "/dashboard.js/"):
             with self.subTest(path=path):
                 self.assertIsNone(server.static_path_for(path))
 
@@ -153,12 +128,13 @@ class DashboardHelperTests(unittest.TestCase):
                 self.assertEqual(server.dashboard_params(params)["direction"], direction)
         for sort in sorted(server.DASHBOARD_SORTS):
             self.assertEqual(server.dashboard_params({"sort": [sort]})["sort"], sort)
-        for params in ({"view": ["funds"]}, {"side": ["up"]}, {"horizon": ["0"]}, {"horizon": ["5"]},
-                       {"horizon": ["1.5"]}, {"horizon": ["abc"]}, {"page": ["0"]}, {"size": ["9"]},
-                       {"size": ["201"]}, {"view": ["hold\nings"]}, {"sort": ["bogus"]}, {"sort": ["Metric"]},
-                       {"sort": [""]}, {"sort": ["price desc"]}, {"direction": ["up"]}, {"direction": ["ASC"]},
-                       {"direction": [""]}, {"direction": ["asc;"]}, {"unmapped": ["all"]},
-                       {"unmapped": ["Include"]}, {"unmapped": [""]}, {"unmapped": ["yes"]}):
+        for params in ({"view": ["funds"]}, {"view": ["about"]}, {"side": ["up"]}, {"horizon": ["0"]},
+                       {"horizon": ["5"]}, {"horizon": ["1.5"]}, {"horizon": ["abc"]}, {"page": ["0"]},
+                       {"size": ["9"]}, {"size": ["201"]}, {"view": ["hold\nings"]}, {"sort": ["bogus"]},
+                       {"sort": ["Metric"]}, {"sort": [""]}, {"sort": ["price desc"]}, {"direction": ["up"]},
+                       {"direction": ["ASC"]}, {"direction": [""]}, {"direction": ["asc;"]}, {"unmapped": ["all"]},
+                       {"unmapped": ["Include"]}, {"unmapped": [""]}, {"unmapped": ["yes"]},
+                       {"view": ["x" * (server.MAX_PARAMETER_LENGTH + 1)]}):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 server.dashboard_params(params)
 
@@ -207,6 +183,18 @@ class DashboardHelperTests(unittest.TestCase):
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA query_only=ON")
         return con
+
+    def test_db_connections_are_read_only_and_carry_no_sidecar(self) -> None:
+        # The fund-signals sidecar is no longer attached: only the main schema (and, for the
+        # dashboard handler, the price cache) is visible to a request.
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_fixture_database(Path(directory) / "fixture.sqlite")
+            with mock.patch.object(server, "DB", database), closing(server.db()) as con:
+                self.assertEqual(con.execute("PRAGMA query_only").fetchone()[0], 1)
+                self.assertEqual([row["name"] for row in con.execute("PRAGMA database_list")], ["main"])
+                self.assertEqual(con.execute("SELECT count(*) FROM periods").fetchone()[0], 3)
+                with self.assertRaises(sqlite3.OperationalError):
+                    con.execute("DELETE FROM periods")
 
     def test_attach_price_cache_falls_back_to_the_empty_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -419,52 +407,53 @@ class BasePathHelperTests(unittest.TestCase):
     def test_request_path_strips_only_the_exact_prefix(self) -> None:
         with mock.patch.object(server, "BASE_PATH", "/13f"):
             for raw, expected in (
-                ("/13f", "/"), ("/13f/", "/"), ("/13f/index.html", "/index.html"), ("/13f/api/meta", "/api/meta"),
-                ("/13f/explorer", "/explorer"), ("/13f/initiations", "/initiations"), ("/13f/movers", "/movers"),
-                ("/13f/explorer/", "/explorer/"), ("/13f/movers/", "/movers/"),
+                ("/13f", "/"), ("/13f/", "/"), ("/13f/dashboard.html", "/dashboard.html"),
+                ("/13f/api/meta", "/api/meta"), ("/13f/about", "/about"), ("/13f/initiations", "/initiations"),
+                ("/13f/movers", "/movers"), ("/13f/about/", "/about/"), ("/13f/movers/", "/movers/"),
                 ("/13f/dashboard/movers", "/dashboard/movers"), ("/13f/dashboard/", "/dashboard/"),
-                ("/13f/app.js", "/app.js"), ("/13f/13f/app.js", "/13f/app.js"),
+                ("/13f/dashboard.js", "/dashboard.js"), ("/13f/13f/dashboard.js", "/13f/dashboard.js"),
+                # Removed explorer paths are stripped like any other and left to the allowlist (404).
+                ("/13f/explorer", "/explorer"), ("/13f/app.js", "/app.js"),
                 # Unprefixed paths pass through unchanged (a proxy may strip the prefix itself);
                 # look-alikes are left for the allowlist to reject.
-                ("/", "/"), ("/api/meta", "/api/meta"), ("/explorer", "/explorer"), ("/dashboard", "/dashboard"),
-                ("/13f-other", "/13f-other"), ("/13fx/app.js", "/13fx/app.js"), ("/13F/app.js", "/13F/app.js"),
-                ("", ""),
+                ("/", "/"), ("/api/meta", "/api/meta"), ("/about", "/about"), ("/dashboard", "/dashboard"),
+                ("/13f-other", "/13f-other"), ("/13fx/dashboard.js", "/13fx/dashboard.js"),
+                ("/13F/dashboard.js", "/13F/dashboard.js"), ("", ""),
             ):
                 with self.subTest(path=raw):
                     self.assertEqual(server.request_path(raw), expected)
             # The query string is not part of the path the handler passes in.
             self.assertEqual(server.request_path("/13f/dashboard/movers?x=1"), "/dashboard/movers?x=1")
         with mock.patch.object(server, "BASE_PATH", "/a/b"):
-            self.assertEqual(server.request_path("/a/b/app.js"), "/app.js")
-            self.assertEqual(server.request_path("/a/app.js"), "/a/app.js")
+            self.assertEqual(server.request_path("/a/b/dashboard.js"), "/dashboard.js")
+            self.assertEqual(server.request_path("/a/dashboard.js"), "/a/dashboard.js")
         with mock.patch.object(server, "BASE_PATH", ""):
-            for raw in ("/", "/13f", "/13f/app.js", "/api/meta", "/13f-other"):
+            for raw in ("/", "/13f", "/13f/dashboard.js", "/api/meta", "/13f-other"):
                 self.assertEqual(server.request_path(raw), raw)
 
     def test_render_document_rewrites_root_absolute_references_only_under_a_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = (
-                '<!doctype html><html><head><link rel="stylesheet" href="/styles.css">'
+                '<!doctype html><html><head><link rel="stylesheet" href="/dashboard.css">'
                 '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\'/%3E">'
                 '<link rel="stylesheet" href="//cdn.example/x.css"><link href="relative.css" rel="stylesheet">'
                 '</head><body><a href="/movers">D</a><a href="/?sort=ticker&amp;direction=asc">S</a>'
-                '<a href="/explorer">E</a>'
+                '<a href="/about">A</a>'
                 '<a href="?view=stocks">Q</a><a href="#top">H</a><a href="/">Root</a>'
                 '<img src="/13f/already.png"><a href="/13f">Prefixed</a><a href="/13fx/other">Lookalike</a>'
-                '<script src="/app.js"></script></body></html>'
+                '<script src="/dashboard.js"></script></body></html>'
             )
-            (root / "index.html").write_text(source, encoding="utf-8")
-            (root / "dashboard.html").write_text('<script src="/dashboard.js"></script>', encoding="utf-8")
+            (root / "dashboard.html").write_text(source, encoding="utf-8")
+            (root / "index.html").write_text('<script src="/app.js"></script>', encoding="utf-8")
             with mock.patch.object(server, "ROOT", root):
                 with mock.patch.object(server, "BASE_PATH", ""):
-                    self.assertEqual(server.render_document("index.html"), source.encode("utf-8"))
-                    self.assertEqual(server.render_document("dashboard.html"), b'<script src="/dashboard.js"></script>')
+                    self.assertEqual(server.render_document("dashboard.html"), source.encode("utf-8"))
                 with mock.patch.object(server, "BASE_PATH", "/13f"):
-                    rendered = server.render_document("index.html").decode("utf-8")
-                    for expected in ('href="/13f/styles.css"', 'src="/13f/app.js"', 'href="/13f/movers"',
+                    rendered = server.render_document("dashboard.html").decode("utf-8")
+                    for expected in ('href="/13f/dashboard.css"', 'src="/13f/dashboard.js"', 'href="/13f/movers"',
                                      'href="/13f/?sort=ticker&amp;direction=asc"', 'href="/13f/"',
-                                     'href="/13f/explorer"', 'href="/13f/13fx/other"'):
+                                     'href="/13f/about"', 'href="/13f/13fx/other"'):
                         with self.subTest(expected=expected):
                             self.assertIn(expected, rendered)
                     for untouched in ('href="data:image/svg+xml,', 'href="//cdn.example/x.css"',
@@ -474,19 +463,17 @@ class BasePathHelperTests(unittest.TestCase):
                             self.assertIn(untouched, rendered)
                     self.assertNotIn("//13f", rendered)
                     self.assertNotIn("/13f/13f/", rendered)
-                    self.assertEqual(server.render_document("dashboard.html"),
-                                     b'<script src="/13f/dashboard.js"></script>')
                 with mock.patch.object(server, "BASE_PATH", "/a/b"):
-                    self.assertIn('src="/a/b/app.js"', server.render_document("index.html").decode("utf-8"))
-        # Only the two served documents are renderable; the real files gain the prefix too.
-        for name in ("server.py", "/index.html", "app.js", "../index.html", ""):
+                    self.assertIn('src="/a/b/dashboard.js"', server.render_document("dashboard.html").decode("utf-8"))
+                # A stray index.html on disk is not a served document any more.
+                for name in ("index.html", "/index.html"):
+                    with self.subTest(name=name), self.assertRaises(ValueError):
+                        server.render_document(name)
+        # Only the dashboard document is renderable; the real file gains the prefix too.
+        for name in ("server.py", "/dashboard.html", "dashboard.js", "../dashboard.html", "index.html", "app.js", ""):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 server.render_document(name)
         with mock.patch.object(server, "BASE_PATH", "/13f"):
-            explorer = server.render_document("index.html").decode("utf-8")
-            self.assertIn('src="/13f/app.js"', explorer)
-            self.assertIn('href="/13f/styles.css"', explorer)
-            self.assertIn('class="dashboard-link" href="/13f/"', explorer)
             dashboard = server.render_document("dashboard.html").decode("utf-8")
             self.assertIn('src="/13f/dashboard.js"', dashboard)
             self.assertIn('href="/13f/dashboard.css"', dashboard)
@@ -494,11 +481,10 @@ class BasePathHelperTests(unittest.TestCase):
             self.assertIn('href="/13f/initiations"', dashboard)
             self.assertIn('href="/13f/movers"', dashboard)
             self.assertIn('href="/13f/?sort=ticker&amp;direction=asc"', dashboard)
-            for document in (explorer, dashboard):
-                self.assertNotIn("//13f", document)
-                self.assertIn('href="data:image/svg+xml,', document)
+            self.assertNotIn("//13f", dashboard)
+            self.assertIn('href="data:image/svg+xml,', dashboard)
         with mock.patch.object(server, "BASE_PATH", ""):
-            self.assertEqual(server.render_document("index.html"), (server.ROOT / "index.html").read_bytes())
+            self.assertEqual(server.render_document("dashboard.html"), (server.ROOT / "dashboard.html").read_bytes())
 
 
 if __name__ == "__main__":

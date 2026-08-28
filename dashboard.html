@@ -14,6 +14,7 @@
       <a href="/" data-view="holdings">Top Holdings</a>
       <a href="/initiations" data-view="initiations">Fresh Initiations</a>
       <a href="/movers" data-view="movers">Top Movers</a>
+      <a href="/about" data-view="about">About</a>
     </nav>
   </header>
   <main id="dashMain" class="dash-main">
@@ -47,6 +48,13 @@
     <nav id="dashPager" class="dash-pager" aria-label="Pages" hidden>
       <a id="dashPrev" href="#" rel="prev">Previous</a><a id="dashNext" href="#" rel="next">Next</a>
     </nav>
+    <section id="dashAbout" class="dash-about" hidden>
+      <h2>About</h2>
+      <p>Form 13F is a quarterly report the SEC requires from institutional investment managers with at least $100 million in qualifying US equity assets. It lists a manager's long positions in exchange-traded stocks, ETFs, certain options, and convertible bonds as of the last day of the quarter. Filings are due within 45 days of quarter end, so the data is always at least six weeks old. Short positions, cash, most bonds, and most non-US holdings are not included.</p>
+      <p>This site aggregates the 13F filings the SEC publishes as bulk datasets — <span id="aboutQuarters">—</span> quarters, <span id="aboutSpan">—</span>, <span id="aboutManagers">—</span> managers in the latest quarter — into three views. Top Holdings shows each security's average portfolio weight across all managers with complete filings; non-holders count as zero, so the figure reflects both how widely a security is held and how large the positions are. Fresh Initiations counts managers that reported a security for the first time relative to the prior quarter. Top Movers shows the change in average weight over one to four quarters, split into gainers and losers.</p>
+      <p>Only filings that reconcile with the SEC's summary totals are used; amendments and restatements replace the originals. Securities without a ticker mapping are hidden by default. Prices, day and YTD changes are daily closes from Nasdaq, refreshed separately from the filings; sector labels come from the Nasdaq screener.</p>
+      <p>13F data shows quarter-end snapshots, not trades. A weight change can come from price moves, splits, or a manager changing its reporting entity, not only from buying or selling. Nothing here is investment advice.</p>
+    </section>
   </main>
   <script src="/dashboard.js"></script>
 </body>

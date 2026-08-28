@@ -1,8 +1,8 @@
-# 13F Explorer — read-only stdlib server in a container.
+# 13F Dashboard — read-only stdlib server in a container.
 #
 # Python standard library only: there is no pip install step. The image ships the
-# scripts and the six static assets; everything the server reads at runtime
-# (13f.sqlite, prices.sqlite, fund_signals.sqlite and the JSON inputs) lives in
+# scripts and the three static assets (dashboard.html/js/css); everything the
+# server reads at runtime (13f.sqlite, prices.sqlite and the JSON inputs) lives in
 # /app/data, which is a volume — bind-mount a data/ directory built elsewhere.
 # Source archives (*_form13f.zip) are deliberately not copied; run with
 # TRUST_DATABASE=1, or mount them and point ARCHIVE_DIR at the mount.
@@ -32,7 +32,7 @@ RUN groupadd --gid 1000 app \
 COPY --chown=app:app \
     server.py build_database.py refresh_fund_signals.py refresh_market_caps.py \
     enrich_tickers.py verify.py Makefile \
-    index.html app.js styles.css dashboard.html dashboard.js dashboard.css \
+    dashboard.html dashboard.js dashboard.css \
     README.md \
     ./
 COPY --chown=app:app tests/ ./tests/

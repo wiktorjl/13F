@@ -47,6 +47,14 @@ TWO_PRICED_BARS = PRICE_BARS + (
 )
 DEFAULT_ORDER = ["NVDA", "TSLA", "AAPL", "MSFT"]
 
+DOCTYPE = b"<!doctype html>"
+DASHBOARD_MARKER = b'id="dashRows"'
+# The About tab's static markup (contract section 2): the section and its three metric spans.
+ABOUT_MARKERS = (b'id="dashAbout"', b'id="aboutQuarters"', b'id="aboutSpan"', b'id="aboutManagers"',
+                 b'data-view="about"')
+# Explorer-era markup and assets that must never come back.
+EXPLORER_MARKERS = (b'id="fundsBody"', b"app.js", b"styles.css", b"/explorer")
+
 
 def _price_cache(path: Path, bars: tuple[tuple[str, str, float], ...] = PRICE_BARS) -> Path:
     with closing(sqlite3.connect(path)) as con:
@@ -118,27 +126,23 @@ class HTTPIntegrationTests(unittest.TestCase):
     def test_exact_static_allowlist_get_and_head(self) -> None:
         # path -> (body prefix, served document or None for JS/CSS)
         allowed = {
-            "/": (b"<!doctype html>", "dashboard.html"),
-            "/initiations": (b"<!doctype html>", "dashboard.html"),
-            "/movers": (b"<!doctype html>", "dashboard.html"),
-            "/movers?horizon=2&side=losers&page=2": (b"<!doctype html>", "dashboard.html"),
-            "/?sort=ticker&direction=asc": (b"<!doctype html>", "dashboard.html"),
+            "/": (DOCTYPE, "dashboard.html"),
+            "/initiations": (DOCTYPE, "dashboard.html"),
+            "/movers": (DOCTYPE, "dashboard.html"),
+            "/about": (DOCTYPE, "dashboard.html"),
+            "/movers?horizon=2&side=losers&page=2": (DOCTYPE, "dashboard.html"),
+            "/?sort=ticker&direction=asc": (DOCTYPE, "dashboard.html"),
+            "/about?ignored=1": (DOCTYPE, "dashboard.html"),  # query state is ignored client-side
             # Legacy aliases from before the dashboard became the landing page.
-            "/dashboard": (b"<!doctype html>", "dashboard.html"),
-            "/dashboard/initiations": (b"<!doctype html>", "dashboard.html"),
-            "/dashboard/movers": (b"<!doctype html>", "dashboard.html"),
-            "/dashboard/movers?horizon=2&side=losers&page=2": (b"<!doctype html>", "dashboard.html"),
-            "/explorer": (b"<!doctype html>", "index.html"),
-            "/explorer?view=stocks": (b"<!doctype html>", "index.html"),
-            "/index.html": (b"<!doctype html>", "index.html"),
-            "/dashboard.html": (b"<!doctype html>", "dashboard.html"),
-            "/app.js": (b"const BASE_PATH", None),
-            "/styles.css": (b":root", None),
-            "/app.js?v=fixture": (b"const BASE_PATH", None),
+            "/dashboard": (DOCTYPE, "dashboard.html"),
+            "/dashboard/initiations": (DOCTYPE, "dashboard.html"),
+            "/dashboard/movers": (DOCTYPE, "dashboard.html"),
+            "/dashboard/movers?horizon=2&side=losers&page=2": (DOCTYPE, "dashboard.html"),
+            "/dashboard.html": (DOCTYPE, "dashboard.html"),
             "/dashboard.js": (b"'use strict';", None),
             "/dashboard.css": (b":root", None),
+            "/dashboard.js?v=fixture": (b"'use strict';", None),
         }
-        markers = {"dashboard.html": b'id="dashRows"', "index.html": b'id="fundsBody"'}
         for path, (prefix, document) in allowed.items():
             with self.subTest(method="GET", path=path):
                 status, headers, body = self.request(path)
@@ -149,12 +153,11 @@ class HTTPIntegrationTests(unittest.TestCase):
                 self.assertEqual(headers.get("cache-control"), "no-cache")
                 if document is not None:
                     self.assertEqual(headers.get("content-type"), "text/html; charset=utf-8")
-                    # Without a base path the documents are served byte-for-byte.
+                    # Without a base path the document is served byte-for-byte.
                     self.assertEqual(body, (server.ROOT / document).read_bytes())
-                    self.assertIn(markers[document], body)
-                    for other, marker in markers.items():
-                        if other != document:
-                            self.assertNotIn(marker, body)
+                    self.assertIn(DASHBOARD_MARKER, body)
+                    for marker in EXPLORER_MARKERS:
+                        self.assertNotIn(marker, body)
             with self.subTest(method="HEAD", path=path):
                 status, headers, body = self.request(path, "HEAD")
                 self.assertEqual(status, 200)
@@ -168,14 +171,26 @@ class HTTPIntegrationTests(unittest.TestCase):
             "/data/13f.sqlite",
             "/tests/support.py",
             "/favicon.ico",
-            "/app.js/extra",
-            "/APP.JS",
-            "/%2e%2e/server.py",
-            "/app%2ejs",
+            # The explorer and its assets were removed; nothing serves them any more.
+            "/explorer",
+            "/explorer?view=stocks",
             "/explorer/",
             "/explorer/x",
             "/Explorer",
             "/EXPLORER",
+            "/index.html",
+            "/app.js",
+            "/app.js?v=fixture",
+            "/styles.css",
+            "/APP.JS",
+            "/app%2ejs",
+            "/%2e%2e/server.py",
+            "/about/",
+            "/about/x",
+            "/About",
+            "/ABOUT",
+            "/about.html",
+            "/dashboard/about",
             "/initiations/",
             "/initiations/x",
             "/movers/",
@@ -188,6 +203,7 @@ class HTTPIntegrationTests(unittest.TestCase):
             "/DASHBOARD",
             "/Dashboard",
             "/dashboard.html/extra",
+            "/dashboard.js/extra",
             "/dashboard%2ejs",
         )
         for method in ("GET", "HEAD"):
@@ -198,10 +214,33 @@ class HTTPIntegrationTests(unittest.TestCase):
                     if method == "HEAD":
                         self.assertEqual(body, b"")
 
+    def test_about_route_serves_the_dashboard_document_with_the_about_section(self) -> None:
+        # Contract section 2: /about is a canonical dashboard route whose markup lives statically
+        # in dashboard.html (a hidden section after the pager, plus a fourth nav link).
+        status, headers, body = self.request("/about")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("content-type"), "text/html; charset=utf-8")
+        self.assertEqual(body, (server.ROOT / "dashboard.html").read_bytes())
+        for marker in ABOUT_MARKERS:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, body)
+        self.assertIn(b'href="/about"', body)
+        self.assertLess(body.index(b'id="dashPager"'), body.index(b'id="dashAbout"'))
+        self.assertIn(b"Nothing here is investment advice.", body)
+        # The same bytes answer at every dashboard route: the About tab is client-side state.
+        for path in ("/", "/initiations", "/movers", "/dashboard"):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(path)[2], body)
+        # /about/ is not a route (only the root tolerates a trailing slash, and only under a prefix).
+        for path in ("/about/", "/about/index.html", "/About"):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(path)[0], 404)
+
     def test_security_headers_cover_success_and_error_responses(self) -> None:
         paths = (("/", 200), ("/api/meta", 200), ("/api/not-real", 404), ("/server.py", 404),
-                 ("/explorer", 200), ("/movers", 200), ("/dashboard", 200), ("/dashboard.js", 200),
-                 ("/api/dashboard", 200), ("/api/dashboard?view=nope", 400), ("/explorer/", 404), ("/movers/", 404))
+                 ("/about", 200), ("/movers", 200), ("/dashboard", 200), ("/dashboard.js", 200),
+                 ("/api/dashboard", 200), ("/api/dashboard?view=nope", 400), ("/explorer", 404),
+                 ("/app.js", 404), ("/about/", 404), ("/movers/", 404))
         expected = {
             "x-content-type-options": "nosniff",
             "x-frame-options": "DENY",
@@ -218,6 +257,7 @@ class HTTPIntegrationTests(unittest.TestCase):
                 policy = headers.get("content-security-policy", "")
                 for directive in ("default-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"):
                     self.assertIn(directive, policy)
+                self.assertNotIn("unsafe-inline", policy)
                 self.assertNotIn("Python", headers.get("server", ""))
 
     def test_head_is_rejected_for_api_without_a_body(self) -> None:
@@ -236,204 +276,49 @@ class HTTPIntegrationTests(unittest.TestCase):
         self.assertIn("field", payload["error"].lower())
 
     def test_meta_response_schema(self) -> None:
+        # A flat object: the build metadata rows plus the period list and latest-quarter totals.
+        # The Docker healthcheck only needs the 200; the About tab reads the counts and periods.
         payload, headers = self.request_json("/api/meta")
         self.assertIsInstance(payload, dict)
         self.assert_keys(payload, {
-            "schema_version", "periods", "latest_period", "forms", "states", "holding_count",
-            "total_value", "distinct_managers", "distinct_issuers", "signal_available",
-            "signal_price_source", "signal_price_date", "research_fund_cutoff",
+            "schema_version", "periods", "latest_period", "period_count", "holding_count",
+            "total_value", "distinct_managers", "distinct_issuers", "built_at",
         })
+        self.assertTrue(all(not isinstance(value, dict) for value in payload.values()))
+        self.assertEqual(payload["schema_version"], server.SCHEMA_VERSION)
         self.assertEqual(payload["latest_period"], "31-DEC-2025")
+        self.assertEqual(payload["period_count"], 3)
         self.assertEqual(len(payload["periods"]), 3)
-        self.assert_keys(payload["periods"][0], {"label", "period_date"})
+        self.assertEqual([period["label"] for period in payload["periods"]],
+                         ["31-DEC-2025", "30-SEP-2025", "30-JUN-2025"])
+        self.assertEqual(payload["periods"][0], {"label": "31-DEC-2025", "period_date": "2025-12-31"})
+        # Latest-quarter totals from period_stats: six positions across all three managers.
+        self.assertEqual((payload["holding_count"], payload["total_value"], payload["distinct_managers"],
+                          payload["distinct_issuers"]), (6, 4_750, 3, 4))
+        self.assertEqual(payload["built_at"], "2026-01-15T12:00:00+00:00")
+        # Explorer-era fields are gone along with the fund-signals sidecar.
+        for removed in ("forms", "states", "signal_available", "signal_price_source", "signal_price_date",
+                        "research_fund_cutoff"):
+            self.assertNotIn(removed, payload)
         self.assertEqual(headers.get("cache-control"), "no-store")
-
-    def test_holdings_response_schema_and_literal_search(self) -> None:
-        payload, _ = self.request_json("/api/holdings?size=10&sort=issuer_asc")
-        self.assert_keys(payload, {"rows", "count", "page", "size", "value", "managers", "issuers"})
-        self.assertGreater(payload["count"], 0)
-        self.assert_keys(payload["rows"][0], {
-            "id", "ticker", "issuer", "class", "cusip", "value", "shares", "shares_type",
-            "put_call", "manager_name", "cik", "starred", "period", "filing_date",
-            "submission_type", "accession", "is_amendment", "coverage_status",
-        })
-        for query in ("%", "_", "' OR 1=1 --"):
-            filtered, _ = self.request_json("/api/holdings?" + urlencode({"q": query, "size": 10}))
-            self.assertEqual(filtered["count"], 0)
-
-    def test_aggregate_response_schema(self) -> None:
-        payload, _ = self.request_json("/api/aggregate?group=issuer&size=10")
-        self.assert_keys(payload, {"group", "label", "rows", "count", "page", "size"})
-        self.assertEqual(payload["group"], "issuer")
-        self.assertGreater(payload["count"], 0)
-        self.assert_keys(payload["rows"][0], {"name", "key", "ticker", "starred", "value", "positions", "managers", "issuers"})
-
-    def test_funds_response_schema(self) -> None:
-        payload, _ = self.request_json("/api/funds?size=10")
-        self.assert_keys(payload, {
-            "rows", "count", "starred_count", "page", "size", "scope",
-            "signal_price_source", "signal_price_date",
-        })
-        self.assertEqual(payload["count"], 3)
-        self.assertEqual(payload["starred_count"], 1)
-        self.assert_keys(payload["rows"][0], {
-            "manager_name", "cik", "starred", "state_country", "filings", "positions",
-            "securities", "value", "latest_filing", "coverage_status", "signal_return",
-            "signal_pnl", "signal_coverage", "priced_signals", "eligible_signals",
-            "signal_rankable", "signal_reason", "scope_value", "scope_scale_inferred",
-        })
-        self.assertTrue(all(row["filings"] == 3 for row in payload["rows"]))
-
-    def test_research_scope_and_search_override(self) -> None:
-        scoped, _ = self.request_json("/api/funds?scope=research&size=10")
-        self.assertEqual(scoped["count"], 1)
-        self.assertEqual(scoped["rows"][0]["manager_name"], "Alpha Capital")
-        searched, _ = self.request_json("/api/funds?scope=research&fund_q=Beta&size=10")
-        self.assertEqual(searched["count"], 1)
-        self.assertEqual(searched["rows"][0]["manager_name"], "Beta Partners")
-
-    def test_single_part_restatement_is_reported_and_filtered_as_an_amendment(self) -> None:
-        holdings, _ = self.request_json(
-            "/api/holdings?period=31-DEC-2025&manager=Alpha&amendments=only&size=10"
-        )
-        self.assertGreater(holdings["count"], 0)
-        self.assertTrue(all(row["submission_type"] == "13F-HR/A" for row in holdings["rows"]))
-        self.assertTrue(all(row["is_amendment"] == 1 for row in holdings["rows"]))
-
-        funds, _ = self.request_json(
-            "/api/funds?period=31-DEC-2025&manager=Alpha&amendments=only&size=10"
-        )
-        self.assertEqual(funds["count"], 1)
-        self.assertEqual(funds["rows"][0]["manager_name"], "Alpha Capital")
 
     def test_unknown_query_parameters_are_rejected_before_dispatch(self) -> None:
         paths = (
-            "/api/meta?x=1", "/api/holdings?x=1", "/api/aggregate?x=1",
-            "/api/funds?x=1", "/api/suggest?x=1", "/api/stock-detail?x=1",
-            "/api/fund-detail?x=1", "/api/net-adds?x=1", "/api/dashboard?x=1",
-            "/api/dashboard?view=holdings&period=31-DEC-2025",
+            "/api/meta?x=1", "/api/meta?period=31-DEC-2025", "/api/dashboard?x=1",
+            "/api/dashboard?view=holdings&period=31-DEC-2025", "/api/dashboard?view=holdings&q=AAPL",
         )
         for path in paths:
             with self.subTest(path=path):
                 payload, _ = self.request_json(path, expected_status=400)
                 self.assertIn("Unknown query parameter", payload["error"])
 
-    def test_suggest_response_schema(self) -> None:
-        managers, _ = self.request_json("/api/suggest?kind=manager&q=Al")
-        self.assertIsInstance(managers, list)
-        self.assertEqual(managers[0]["name"], "Alpha Capital")
-        self.assert_keys(managers[0], {"name", "key"})
-        issuers, _ = self.request_json("/api/suggest?kind=issuer&q=AA")
-        self.assertIsInstance(issuers, list)
-        self.assert_keys(issuers[0], {"name", "key"})
-        short, _ = self.request_json("/api/suggest?kind=invalid&q=A")
-        self.assertEqual(short, [])
-
-    def test_stock_detail_response_schema(self) -> None:
-        payload, _ = self.request_json(
-            "/api/stock-detail?cusip=037833100&period=31-DEC-2025&page=1&size=10"
-        )
-        self.assert_keys(payload, {
-            "security", "current_period", "previous_period", "history", "rows", "count",
-            "page", "size", "summary",
-        })
-        self.assertEqual(payload["security"]["ticker"], "AAPL")
-        self.assertEqual(len(payload["history"]), 3)
-        self.assert_keys(payload["history"][0], {"period", "period_date", "value", "funds"})
-        self.assertGreater(payload["count"], 0)
-        self.assert_keys(payload["rows"][0], {
-            "manager_id", "manager_name", "cik", "starred", "position_type", "shares_type",
-            "current_shares", "previous_shares", "delta_shares", "delta_percent", "current_value",
-            "previous_value", "delta_value", "status", "current_weight", "previous_weight",
-            "weight_change", "current_coverage", "previous_coverage",
-        })
-        self.assert_keys(payload["summary"], {
-            "increased", "reduced", "new", "exited", "added_or_new", "reduced_or_exited", "not_comparable",
-        })
-
-    def test_fund_detail_response_schema(self) -> None:
-        payload, _ = self.request_json(
-            "/api/fund-detail?cik=1&period=31-DEC-2025&page=1&size=10"
-        )
-        self.assert_keys(payload, {
-            "manager", "current_period", "previous_period", "current_coverage", "previous_coverage",
-            "history", "rows", "count", "page", "size", "summary",
-        })
-        self.assertEqual(payload["manager"]["name"], "Alpha Capital")
-        self.assertEqual(len(payload["history"]), 3)
-        self.assert_keys(payload["history"][0], {
-            "period", "period_date", "coverage_status", "value", "positions", "securities",
-        })
-        self.assertGreater(payload["count"], 0)
-        self.assert_keys(payload["rows"][0], {
-            "ticker", "issuer", "class", "cusip", "position_type", "shares_type",
-            "current_shares", "previous_shares", "delta_shares", "delta_percent", "current_value",
-            "previous_value", "delta_value", "status", "current_weight", "previous_weight",
-            "weight_change", "current_coverage", "previous_coverage",
-        })
-        self.assert_keys(payload["summary"], {"increased", "reduced", "new", "exited"})
-
-    def test_oldest_quarter_detail_schemas_remain_complete(self) -> None:
-        stock, _ = self.request_json(
-            "/api/stock-detail?cusip=037833100&period=30-JUN-2025&page=7&size=10"
-        )
-        self.assert_keys(stock, {
-            "security", "current_period", "previous_period", "history", "rows", "count",
-            "page", "size", "summary",
-        })
-        self.assertIsNone(stock["previous_period"])
-        self.assertEqual((stock["rows"], stock["count"], stock["page"], stock["size"]), ([], 0, 7, 10))
-        self.assert_keys(stock["summary"], {
-            "increased", "reduced", "new", "exited", "added_or_new", "reduced_or_exited",
-            "not_comparable",
-        })
-
-        fund, _ = self.request_json(
-            "/api/fund-detail?cik=1&period=30-JUN-2025&page=7&size=10"
-        )
-        self.assert_keys(fund, {
-            "manager", "current_period", "previous_period", "current_coverage", "previous_coverage",
-            "history", "rows", "count", "page", "size", "summary",
-        })
-        self.assertIsNone(fund["previous_period"])
-        self.assertEqual((fund["rows"], fund["count"], fund["page"], fund["size"]), ([], 0, 7, 10))
-        self.assert_keys(fund["summary"], {"increased", "reduced", "new", "exited"})
-
-    def test_out_of_range_fund_detail_page_preserves_total_and_summary(self) -> None:
-        base, _ = self.request_json(
-            "/api/fund-detail?cik=1&period=31-DEC-2025&page=1&size=10"
-        )
-        beyond, _ = self.request_json(
-            "/api/fund-detail?cik=1&period=31-DEC-2025&page=100&size=10"
-        )
-        self.assertGreater(base["count"], 0)
-        self.assertEqual(beyond["rows"], [])
-        self.assertEqual(beyond["count"], base["count"])
-        self.assertEqual(beyond["summary"], base["summary"])
-        self.assertEqual((beyond["page"], beyond["size"]), (100, 10))
-
-    def test_net_adds_response_schema_for_all_metrics(self) -> None:
-        for metric in ("value", "portfolio", "position"):
-            with self.subTest(metric=metric):
-                payload, _ = self.request_json(
-                    "/api/net-adds?" + urlencode({"metric": metric, "position": "SHARES", "size": 10})
-                )
-                self.assert_keys(payload, {"periods", "metric", "position_type", "rows", "count", "page", "size"})
-                self.assertEqual(payload["metric"], metric)
-                self.assertEqual(len(payload["periods"]), 2)
-                self.assert_keys(payload["periods"][0], {
-                    "id", "label", "period_date", "previous_id", "previous_label", "comparable_managers",
-                })
-                self.assertGreater(payload["count"], 0)
-                row = payload["rows"][0]
-                self.assert_keys(row, {
-                    "ticker", "issuer", "cusip", "market_cap", "overall", "defined_releases",
-                    "adding_funds", "cutting_funds", "current_funds", "current_value", "trend",
-                    "net_rank", "history",
-                })
-                self.assertEqual(len(row["history"]), len(payload["periods"]))
-                if metric == "position":
-                    self.assertEqual(len(row["history_status"]), len(payload["periods"]))
+    def test_removed_explorer_endpoints_are_json_404(self) -> None:
+        for path in ("/api/holdings", "/api/aggregate?group=issuer", "/api/funds", "/api/suggest?kind=manager&q=A",
+                     "/api/stock-detail?cusip=037833100", "/api/fund-detail?cik=1", "/api/net-adds?metric=value",
+                     "/api/does-not-exist", "/api/", "/api/meta/", "/api/Meta", "/api/dashboard/"):
+            with self.subTest(path=path):
+                payload, _ = self.request_json(path, expected_status=404)
+                self.assertEqual(payload, {"error": "Not found"})
 
     def assert_unpriced(self, payload: dict) -> None:
         self.assertFalse(payload["price_available"])
@@ -530,6 +415,9 @@ class HTTPIntegrationTests(unittest.TestCase):
                 movers, _ = self.request_json("/api/dashboard?view=movers&horizon=1&side=losers&page=1&size=100")
                 self.assertTrue(movers["price_available"])
                 self.assertEqual(movers["rows"][0]["price"], 265.0)
+                # /api/meta never attaches the price cache and stays a flat object either way.
+                meta, _ = self.request_json("/api/meta")
+                self.assertEqual(meta["latest_period"], "31-DEC-2025")
             broken = Path(directory) / "broken.sqlite"
             broken.write_bytes(b"not a database")
             with mock.patch.object(server, "PRICE_CACHE", broken):
@@ -607,53 +495,10 @@ class HTTPIntegrationTests(unittest.TestCase):
         losers, _ = self.request_json("/api/dashboard?view=movers&side=losers&sort=ytd")
         self.assertEqual(([row["ticker"] for row in losers["rows"]], losers["direction"]), (["AAPL", "TSLA"], "asc"))
 
-    def test_unknown_api_is_json_404(self) -> None:
-        payload, _ = self.request_json("/api/does-not-exist", expected_status=404)
-        self.assertEqual(payload, {"error": "Not found"})
-
     def test_invalid_numerics_enums_ranges_and_pages(self) -> None:
         cases = (
-            "/api/holdings?page=0",
-            f"/api/holdings?page={server.MAX_PAGE + 1}",
-            "/api/holdings?page=abc",
-            "/api/holdings?size=9",
-            "/api/holdings?size=201",
-            "/api/holdings?min_value=-1",
-            "/api/holdings?min_value=1.5",
-            "/api/holdings?min_value=nan",
-            "/api/holdings?min_value=20&max_value=10",
-            "/api/holdings?amendments=all",
-            "/api/holdings?put_call=short",
-            "/api/holdings?form=13F-HR%2FA",
-            "/api/holdings?period=ALL",
-            "/api/aggregate?group=unknown",
-            "/api/aggregate?direction=sideways",
-            "/api/aggregate?size=4",
-            "/api/funds?starred=2",
-            "/api/funds?scope=small",
-            "/api/funds?direction=sideways",
-            "/api/suggest?kind=unknown&q=AA",
-            "/api/stock-detail?cusip=bad%20cusip",
-            "/api/stock-detail?cusip=123456789",
-            "/api/stock-detail?cusip=037833100&period=unknown",
-            "/api/stock-detail?cusip=037833100&change=BOUGHT",
-            "/api/stock-detail?cusip=037833100&position=3",
-            "/api/stock-detail?cusip=037833100&page=-1",
-            "/api/fund-detail?cik=abc",
-            "/api/fund-detail?cik=999",
-            "/api/fund-detail?cik=1&change=BOUGHT",
-            "/api/fund-detail?cik=1&position=3",
-            "/api/net-adds?metric=shares",
-            "/api/net-adds?position=SHORT",
-            "/api/net-adds?direction=sideways",
-            "/api/net-adds?min_activity=-1",
-            "/api/net-adds?min_activity=1.5",
-            "/api/net-adds?min_market_cap=nan",
-            "/api/net-adds?min_adding_funds=4&max_adding_funds=3",
-            "/api/net-adds?min_cutting_funds=4&max_cutting_funds=3",
-            "/api/net-adds?min_market_cap=4&max_market_cap=3",
-            "/api/net-adds?page=0",
             "/api/dashboard?view=funds",
+            "/api/dashboard?view=about",
             "/api/dashboard?view=HOLDINGS",
             "/api/dashboard?side=up",
             "/api/dashboard?view=movers&side=Gainers",
@@ -664,9 +509,11 @@ class HTTPIntegrationTests(unittest.TestCase):
             "/api/dashboard?view=holdings&horizon=9",
             "/api/dashboard?page=0",
             f"/api/dashboard?page={server.MAX_PAGE + 1}",
+            "/api/dashboard?page=abc",
             "/api/dashboard?size=9",
             "/api/dashboard?size=201",
             "/api/dashboard?view=line%0Abreak",
+            "/api/dashboard?view=" + "x" * (server.MAX_PARAMETER_LENGTH + 1),
             "/api/dashboard?sort=bogus",
             "/api/dashboard?sort=Metric",
             "/api/dashboard?sort=avg_weight",
@@ -677,8 +524,6 @@ class HTTPIntegrationTests(unittest.TestCase):
             "/api/dashboard?unmapped=all",
             "/api/dashboard?unmapped=Include",
             "/api/dashboard?view=movers&unmapped=1",
-            "/api/holdings?q=" + "x" * (server.MAX_PARAMETER_LENGTH + 1),
-            "/api/holdings?q=line%0Abreak",
         )
         for path in cases:
             with self.subTest(path=path):
@@ -773,6 +618,13 @@ class DashboardFixtureVariantTests(unittest.TestCase):
             for horizon in (1, 4):
                 movers = self.dashboard(database, {"view": "movers", "horizon": horizon, "side": "gainers"})
                 self.assertEqual((movers["rows"], movers["count"], movers["comparison_period"]), ([], 0, None))
+            # /api/meta still describes the single remaining quarter.
+            with running_server(database) as address:
+                status, _, body = http_request(address, "/api/meta")
+            self.assertEqual(status, 200)
+            meta = json.loads(body)
+            self.assertEqual((meta["period_count"], meta["latest_period"], len(meta["periods"])),
+                             (1, "31-DEC-2025", 1))
 
     def test_blank_ticker_and_unmapped_ticker_fall_back_to_issuer(self) -> None:
         # Section 5: name falls back to the SEC issuer and sector to '' when the screener has no
@@ -1004,31 +856,27 @@ class BasePathTests(unittest.TestCase):
         html = "text/html; charset=utf-8"
         # path -> (body prefix, content type, served document or None)
         expected = {
-            "/13f": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/?sort=ticker&direction=asc": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/initiations": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/movers": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/movers?horizon=2&side=losers": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/dashboard": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/dashboard/initiations": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/dashboard/movers": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/dashboard.html": (b"<!doctype html>", html, "dashboard.html"),
-            "/13f/explorer": (b"<!doctype html>", html, "index.html"),
-            "/13f/explorer?view=stocks": (b"<!doctype html>", html, "index.html"),
-            "/13f/index.html": (b"<!doctype html>", html, "index.html"),
-            "/13f/app.js": (b"const BASE_PATH", "text/javascript", None),
-            "/13f/styles.css": (b":root", "text/css", None),
+            "/13f": (DOCTYPE, html, "dashboard.html"),
+            "/13f/": (DOCTYPE, html, "dashboard.html"),
+            "/13f/?sort=ticker&direction=asc": (DOCTYPE, html, "dashboard.html"),
+            "/13f/initiations": (DOCTYPE, html, "dashboard.html"),
+            "/13f/movers": (DOCTYPE, html, "dashboard.html"),
+            "/13f/movers?horizon=2&side=losers": (DOCTYPE, html, "dashboard.html"),
+            "/13f/about": (DOCTYPE, html, "dashboard.html"),
+            "/13f/about?ignored=1": (DOCTYPE, html, "dashboard.html"),
+            "/13f/dashboard": (DOCTYPE, html, "dashboard.html"),
+            "/13f/dashboard/initiations": (DOCTYPE, html, "dashboard.html"),
+            "/13f/dashboard/movers": (DOCTYPE, html, "dashboard.html"),
+            "/13f/dashboard.html": (DOCTYPE, html, "dashboard.html"),
             "/13f/dashboard.js": (b"'use strict';", "text/javascript", None),
             "/13f/dashboard.css": (b":root", "text/css", None),
             # A proxy that strips the prefix delivers these; they keep working.
-            "/": (b"<!doctype html>", html, "dashboard.html"),
-            "/explorer": (b"<!doctype html>", html, "index.html"),
-            "/movers": (b"<!doctype html>", html, "dashboard.html"),
-            "/dashboard/movers": (b"<!doctype html>", html, "dashboard.html"),
-            "/app.js": (b"const BASE_PATH", "text/javascript", None),
+            "/": (DOCTYPE, html, "dashboard.html"),
+            "/about": (DOCTYPE, html, "dashboard.html"),
+            "/movers": (DOCTYPE, html, "dashboard.html"),
+            "/dashboard/movers": (DOCTYPE, html, "dashboard.html"),
+            "/dashboard.js": (b"'use strict';", "text/javascript", None),
         }
-        markers = {"dashboard.html": b'id="dashRows"', "index.html": b'id="fundsBody"'}
         for path, (prefix, content_type, document) in expected.items():
             with self.subTest(method="GET", path=path):
                 status, headers, body = self.request(path)
@@ -1041,20 +889,21 @@ class BasePathTests(unittest.TestCase):
                 self.assertEqual(headers.get("x-frame-options"), "DENY")
                 self.assertIn("default-src 'self'", headers.get("content-security-policy", ""))
                 if document is not None:
-                    self.assertIn(markers[document], body)
-                    for other, marker in markers.items():
-                        if other != document:
-                            self.assertNotIn(marker, body)
+                    self.assertIn(DASHBOARD_MARKER, body)
+                    for marker in EXPLORER_MARKERS:
+                        self.assertNotIn(marker, body)
             with self.subTest(method="HEAD", path=path):
                 status, headers, body = self.request(path, "HEAD")
                 self.assertEqual(status, 200)
                 self.assertEqual(body, b"")
                 self.assertGreater(int(headers["content-length"]), 0)
                 self.assertEqual(headers.get("cache-control"), "no-cache")
-        for path in ("/13f-other", "/13fx/app.js", "/13f/explorer/", "/13f/initiations/", "/13f/movers/",
-                     "/13f/dashboard/", "/13f/server.py", "/13f/data/13f.sqlite", "/13f/13f/app.js",
-                     "/13F/app.js", "/13f//app.js", "/13f/dashboard/movers/", "/13f/index.html/",
-                     "/13f/Explorer", "/13f/explorer/x", "/13f/movers/x"):
+        for path in ("/13f-other", "/13fx/dashboard.js", "/13f/explorer", "/13f/explorer/", "/13f/index.html",
+                     "/13f/app.js", "/13f/styles.css", "/13f/about/", "/13f/about/x", "/13f/About",
+                     "/13f/initiations/", "/13f/movers/", "/13f/dashboard/", "/13f/dashboard/about",
+                     "/13f/server.py", "/13f/data/13f.sqlite", "/13f/13f/dashboard.js", "/13F/dashboard.js",
+                     "/13f//dashboard.js", "/13f/dashboard/movers/", "/13f/dashboard.html/", "/13f/movers/x",
+                     "/explorer", "/app.js", "/about/"):
             for method in ("GET", "HEAD"):
                 with self.subTest(method=method, path=path):
                     status, headers, body = self.request(path, method)
@@ -1064,18 +913,8 @@ class BasePathTests(unittest.TestCase):
                         self.assertEqual(body, b"")
 
     def test_documents_carry_the_prefix(self) -> None:
-        for path in ("/13f/explorer", "/13f/explorer?view=stocks", "/13f/index.html", "/explorer"):
-            with self.subTest(path=path):
-                status, _, body = self.request(path)
-                self.assertEqual(status, 200)
-                text = body.decode("utf-8")
-                self.assertIn('src="/13f/app.js"', text)
-                self.assertIn('href="/13f/styles.css"', text)
-                self.assertIn('class="dashboard-link" href="/13f/"', text)
-                self.assertNotIn("//13f", text)
-                self.assertNotIn('src="/app.js"', text)
-        for path in ("/13f", "/13f/", "/13f/initiations", "/13f/movers", "/13f/dashboard", "/13f/dashboard/movers",
-                     "/13f/dashboard.html", "/", "/dashboard"):
+        for path in ("/13f", "/13f/", "/13f/initiations", "/13f/movers", "/13f/about", "/13f/dashboard",
+                     "/13f/dashboard/movers", "/13f/dashboard.html", "/", "/about", "/dashboard"):
             with self.subTest(path=path):
                 status, _, body = self.request(path)
                 self.assertEqual(status, 200)
@@ -1085,19 +924,25 @@ class BasePathTests(unittest.TestCase):
                 self.assertIn('id="dashLogo" class="dash-logo" href="/13f/"', text)
                 self.assertIn('href="/13f/initiations"', text)
                 self.assertIn('href="/13f/movers"', text)
+                self.assertIn('href="/13f/about" data-view="about"', text)
                 self.assertIn('href="/13f/movers?side=losers"', text)
                 self.assertIn('href="/13f/?sort=ticker&amp;direction=asc"', text)
-                self.assertIn(b'id="dashRows"', body)
+                self.assertIn(DASHBOARD_MARKER, body)
+                for marker in ABOUT_MARKERS:
+                    self.assertIn(marker, body)
                 self.assertNotIn("//13f", text)
+                self.assertNotIn('href="/about"', text)
                 self.assertNotIn("/13f/dashboard", text.replace("/13f/dashboard.js", "").replace("/13f/dashboard.css", ""))
                 self.assertIn('href="data:image/svg+xml,', text)
         # Scripts and styles are served verbatim (the prefix is derived client-side).
-        _, _, script = self.request("/13f/app.js")
-        self.assertEqual(script, (server.ROOT / "app.js").read_bytes())
+        _, _, script = self.request("/13f/dashboard.js")
+        self.assertEqual(script, (server.ROOT / "dashboard.js").read_bytes())
+        _, _, stylesheet = self.request("/13f/dashboard.css")
+        self.assertEqual(stylesheet, (server.ROOT / "dashboard.css").read_bytes())
 
     def test_api_under_the_prefix(self) -> None:
         for path in ("/13f/api/meta", "/api/meta", "/13f/api/dashboard?view=movers",
-                     "/13f/api/dashboard?view=holdings&unmapped=include", "/13f/api/holdings?period=31-DEC-2025"):
+                     "/13f/api/dashboard?view=holdings&unmapped=include"):
             with self.subTest(path=path):
                 status, headers, body = self.request(path)
                 self.assertEqual(status, 200, body[:120])
@@ -1108,8 +953,12 @@ class BasePathTests(unittest.TestCase):
         movers = json.loads(self.request("/13f/api/dashboard?view=movers")[2])
         self.assertEqual((movers["view"], movers["unmapped"], [row["ticker"] for row in movers["rows"]]),
                          ("movers", "exclude", ["NVDA", "MSFT"]))
-        status, _, body = self.request("/13f/api/nope")
-        self.assertEqual((status, json.loads(body)), (404, {"error": "Not found"}))
+        meta = json.loads(self.request("/13f/api/meta")[2])
+        self.assertEqual((meta["period_count"], meta["latest_period"]), (3, "31-DEC-2025"))
+        for path in ("/13f/api/nope", "/13f/api/holdings?period=31-DEC-2025", "/13f/api/funds"):
+            with self.subTest(path=path):
+                status, _, body = self.request(path)
+                self.assertEqual((status, json.loads(body)), (404, {"error": "Not found"}))
         status, _, body = self.request("/13f/api/meta?x=1")
         self.assertEqual(status, 400)
         status, _, body = self.request("/13f/api/meta", "HEAD")

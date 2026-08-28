@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic verification workflow for the local 13F Explorer."""
+"""Deterministic verification workflow for the local 13F dashboard."""
 
 from __future__ import annotations
 
@@ -25,11 +25,12 @@ from tests.chromium_walkthrough import run_walkthrough
 from tests.support import create_fixture_database, http_request, running_server
 
 ROOT = Path(__file__).resolve().parent
-JAVASCRIPT_FILES = ("app.js", "dashboard.js")
+JAVASCRIPT_FILES = ("dashboard.js",)
 # The dashboard DOM contract: tests/chromium_walkthrough.py and dashboard.js both key on these.
 DASHBOARD_IDS = frozenset({
     "dashLogo", "dashNav", "dashMain", "dashControls", "dashSide", "dashHorizon",
     "dashTable", "dashHead", "dashRows", "dashStatus", "dashPager", "dashPrev", "dashNext",
+    "dashAbout", "aboutQuarters", "aboutSpan", "aboutManagers",
 })
 
 
@@ -82,8 +83,8 @@ def audit_document(name: str, *, scripts: list[str], stylesheets: list[str],
         raise VerificationFailure(f"{name} contains inline style or event-handler attributes that violate the static CSP")
     if audit.preloads:
         raise VerificationFailure(f"{name} contains preload links outside the static allowlist: {audit.preloads}")
-    # Root-absolute references ("/dashboard.js") are how the routed documents
-    # (/, /initiations, /movers, /explorer) reach the same allowlisted assets. Tolerate exactly
+    # Root-absolute references ("/dashboard.js") are how the routed document
+    # (/, /initiations, /movers, /about) reaches the same allowlisted assets. Tolerate exactly
     # one leading slash: "//dashboard.js" is a protocol-relative external host.
     if ([src.removeprefix("/") for src in audit.scripts] != scripts
             or [href.removeprefix("/") for href in audit.stylesheets] != stylesheets):
@@ -115,11 +116,10 @@ def syntax_checks() -> dict[str, Any]:
         if result.returncode:
             raise VerificationFailure(f"{name} syntax check failed:\n{result.stdout}")
 
-    explorer = audit_document("index.html", scripts=["app.js"], stylesheets=["styles.css"])
     dashboard = audit_document("dashboard.html", scripts=["dashboard.js"], stylesheets=["dashboard.css"],
                                required_ids=DASHBOARD_IDS)
     return {"python_files": len(python_files), "javascript": "node --check " + " ".join(JAVASCRIPT_FILES),
-            "html_ids": len(explorer.ids), "dashboard_ids": len(dashboard.ids)}
+            "dashboard_ids": len(dashboard.ids)}
 
 
 def run_unittests() -> None:
@@ -211,39 +211,11 @@ def check_database(path: Path, *, require_fresh: bool) -> dict[str, Any]:
         }
 
 
-def _sample_entities(database: Path) -> tuple[str, str, str, str]:
-    uri = f"file:{Path(database).resolve()}?mode=ro"
-    with contextlib.closing(sqlite3.connect(uri, uri=True)) as con:
-        latest_id, latest_label = con.execute(
-            "SELECT id,label FROM periods ORDER BY period_date DESC LIMIT 1"
-        ).fetchone()
-        cik, manager_name = con.execute(
-            """SELECT m.cik,m.name FROM positions p JOIN managers m ON m.id=p.manager_id
-            WHERE p.period_id=? GROUP BY m.id ORDER BY sum(p.value) DESC,m.cik LIMIT 1""",
-            (latest_id,),
-        ).fetchone()
-        cusip = con.execute(
-            """SELECT s.cusip FROM positions p JOIN securities s ON s.id=p.security_id
-            WHERE p.period_id=? GROUP BY s.id ORDER BY sum(p.value) DESC,s.cusip LIMIT 1""",
-            (latest_id,),
-        ).fetchone()[0]
-    return str(latest_label), str(cik), str(cusip), str(manager_name)
-
-
 def api_smoke_and_performance(
     database: Path, *, repetitions: int = 2, budget_seconds: float = 5.0
 ) -> dict[str, dict[str, float]]:
-    latest, cik, cusip, manager_name = _sample_entities(database)
-    suggestion = manager_name[:2]
-    endpoints: dict[str, tuple[str, set[str] | None]] = {
-        "meta": ("/api/meta", {"periods", "latest_period", "holding_count"}),
-        "holdings": ("/api/holdings?" + urlencode({"period": latest, "page": 1, "size": 10}), {"rows", "count", "value"}),
-        "aggregate": ("/api/aggregate?" + urlencode({"period": latest, "group": "issuer", "page": 1, "size": 10}), {"rows", "count", "group"}),
-        "funds": ("/api/funds?" + urlencode({"period": latest, "page": 1, "size": 10}), {"rows", "count", "starred_count"}),
-        "suggest": ("/api/suggest?" + urlencode({"kind": "manager", "q": suggestion}), None),
-        "stock-detail": ("/api/stock-detail?" + urlencode({"cusip": cusip, "period": latest, "page": 1, "size": 10}), {"security", "rows", "summary"}),
-        "fund-detail": ("/api/fund-detail?" + urlencode({"cik": cik, "period": latest, "page": 1, "size": 10}), {"manager", "rows", "summary"}),
-        "net-adds": ("/api/net-adds?" + urlencode({"metric": "value", "position": "SHARES", "page": 1, "size": 10}), {"periods", "rows", "count"}),
+    endpoints: dict[str, tuple[str, set[str]]] = {
+        "meta": ("/api/meta", {"periods", "latest_period", "period_count", "holding_count", "distinct_managers"}),
         "dashboard": ("/api/dashboard?" + urlencode({"view": "movers", "horizon": 1, "side": "gainers", "page": 1, "size": 10}), {"rows", "count", "view"}),
         "dashboard-holdings": ("/api/dashboard?" + urlencode({"view": "holdings", "page": 1, "size": 10}), {"rows", "count", "view"}),
         "dashboard-initiations": ("/api/dashboard?" + urlencode({"view": "initiations", "page": 1, "size": 10}), {"rows", "count", "view"}),
@@ -271,11 +243,8 @@ def api_smoke_and_performance(
                     raise VerificationFailure(f"API smoke {name} returned invalid JSON") from exc
                 if index:
                     durations.append(elapsed)
-            if required_keys is not None:
-                if not isinstance(payload, dict) or not required_keys.issubset(payload):
-                    raise VerificationFailure(f"API smoke {name} response is missing {required_keys}")
-            elif not isinstance(payload, list):
-                raise VerificationFailure(f"API smoke {name} response should be a list")
+            if not isinstance(payload, dict) or not required_keys.issubset(payload):
+                raise VerificationFailure(f"API smoke {name} response is missing {required_keys}")
             maximum = max(durations)
             if maximum > budget_seconds:
                 raise VerificationFailure(
