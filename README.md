@@ -26,7 +26,7 @@ python3 build_database.py --force
 
 ## Dashboard
 
-The page is deliberately minimal: a single centered list of securities with a plain-text header row (Ticker, Name, the view's metric, Price, Day, YTD, Sector) whose labels sort the list, and no filters, search, charts, or fund metadata. Every row links its ticker and name to Yahoo Finance. The header nav has four links:
+The page is deliberately minimal: a single centered list of securities with a plain-text header row (Ticker, Name, the view's metric, Price, Day, YTD, Sector) whose labels sort the list, and no filters, search, charts, or fund metadata. Every row links its ticker and name to Yahoo Finance. On phones (under 640px wide) each row takes two lines — ticker, name and the bold metric, then price, day, YTD and sector — and the column headers collapse into one wrapping line of sort links (`Sort  Avg Weight ↓  Ticker  Name  Price  Day  YTD  Sector`, the active one underlined with its arrow); the view links, the Movers toggles, the sort links and the pager keep the same 14px text but grow to 44px-tall tap areas, and the page never scrolls sideways. The header nav has four links:
 
 - **Top Holdings** (`/`) — every security held by at least one manager in the latest quarter, ordered by average portfolio weight.
 - **Fresh Initiations** (`/initiations`) — securities that gained first-time holders versus the prior quarter.
@@ -157,7 +157,7 @@ Run the complete release gate with:
 make verify
 ```
 
-This compiles the Python sources, checks `dashboard.js` with Node, audits `dashboard.html` (no inline scripts, no duplicate IDs, only the allowlisted assets, every required element ID present), runs the standard-library unit and HTTP integration suite, proves that the production database is fresh and internally consistent, exercises both API endpoints with response-time budgets, and completes a direct headless-Chromium walkthrough: Top Holdings with header sorting and paging, Fresh Initiations, Top Movers at 2Q/Losers, the About page, then a 375×812 mobile layout check with a no-horizontal-overflow assertion. Its JSON report and the `dashboard-desktop.png` / `dashboard-mobile.png` screenshots are written to `artifacts/`.
+This compiles the Python sources, checks `dashboard.js` with Node, audits `dashboard.html` (no inline scripts, no duplicate IDs, only the allowlisted assets, every required element ID present), runs the standard-library unit and HTTP integration suite, proves that the production database is fresh and internally consistent, exercises both API endpoints with response-time budgets, and completes a direct headless-Chromium walkthrough: Top Holdings with header sorting and paging, Fresh Initiations, Top Movers at 2Q/Losers, the About page, then phone layout checks — Top Holdings at 375×812, Top Movers reloaded at 375×812 and 360×740 — that assert no horizontal overflow, the visible compact sort line, and a bounding box at least 44px tall on every header link, Movers toggle, pager link, and sort link. Its JSON report and the `dashboard-desktop.png` / `dashboard-mobile.png` / `dashboard-mobile-movers.png` / `dashboard-mobile-360.png` screenshots are written to `artifacts/`.
 
 For a fast deterministic check that never reads, builds, or requires the full production database or Chromium, use:
 

@@ -11,7 +11,13 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
-html { overflow-x: clip; background: var(--bg); }
+/* text-size-adjust: 100% stops iOS Safari inflating the 14px/16px text when a phone turns to landscape. */
+html {
+  overflow-x: clip;
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
   margin: 0;
   overflow-x: clip;
@@ -20,7 +26,7 @@ body {
   font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
-a { color: inherit; }
+a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
 :where(a, [tabindex]):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -215,11 +221,54 @@ a { color: inherit; }
 .dash-about p { margin: 0 0 12px; }
 .dash-about p:last-child { margin-bottom: 0; }
 
-/* Narrow screens: two lines per row, never a horizontal page scroll. The table collapses to blocks and each
-   row becomes the two-line grid; the header row uses the same areas so labels sit where values sit. */
+/* Phones (under 640px): two lines per row, never a horizontal page scroll. Every control keeps its 14px text but
+   becomes a 44px-tall hit box: inline-block with a 20px line and 12px of vertical padding, plus 4px of horizontal
+   padding that a matching negative margin pulls back so the text sits exactly where the desktop layout put it. */
 @media (max-width: 639.98px) {
-  .dash-header { flex-wrap: wrap; gap: 12px 16px; }
-  .dash-nav { gap: 16px; }
+  .dash-nav a,
+  .dash-toggle a,
+  .dash-pager a,
+  .dash-head .dash-sort {
+    display: inline-block;
+    line-height: 20px;
+    padding: 12px 4px;
+    margin: 0 -4px;
+  }
+  /* Row links and the logo are the remaining per-row / header tap targets: grow the hit box
+     symmetrically so the text stays exactly where it is. */
+  .dash-row a { display: inline-block; padding: 14px 4px; margin: -14px -4px; max-width: 100%; }
+  .dash-logo { padding: 11px 4px; margin: -11px -4px; }
+  .dash-status a {
+    display: inline-block;
+    line-height: 20px;
+    padding: 12px 4px;
+    margin: -12px -4px;
+  }
+
+  /* Header: the logo on its own line, the four view links in one row below it (wrapping again only when the
+     width forces it, e.g. 320px). */
+  .dash-header { flex-wrap: wrap; gap: 0 16px; padding: 8px 16px 4px; }
+  .dash-nav { flex-basis: 100%; gap: 0 12px; }
+
+  /* Movers controls: Gainers | Losers and 1Q–4Q share a line when they fit and otherwise take one line each,
+     left-aligned. The timeframe links are centred in 44px-wide boxes; the nav's negative margin keeps the first
+     and last labels near the 16px column edge. */
+  .dash-controls {
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0 24px;
+    padding: 0 16px;
+  }
+  .dash-horizon { margin: 0 -12px; gap: 0; }
+  .dash-horizon a {
+    min-width: 44px;
+    padding: 12px 0;
+    margin: 0;
+    text-align: center;
+  }
+
+  /* Table: blocks instead of table layout; each row is a two-line grid (ticker, name, metric / price, day, ytd,
+     sector) with the metric bold and right-aligned. */
   .dash-table,
   .dash-table thead,
   .dash-table tbody { display: block; width: 100%; }
@@ -246,4 +295,52 @@ a { color: inherit; }
   .dash-table .dash-day { grid-area: day; text-align: left; }
   .dash-table .dash-ytd { grid-area: ytd; }
   .dash-table .dash-sector { grid-area: sector; }
+
+  /* The column headers become one wrapping line of plain-text sort links: "Sort", the view's metric first, then
+     the other columns in table order. The two-line rows are self-explanatory, so the labels no longer need to
+     sit over the columns. The empty direction header carries the "Sort" caption. */
+  .dash-table .dash-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 16px;
+    padding: 0 16px;
+  }
+  .dash-table .dash-head th {
+    width: auto;
+    max-width: none;
+    overflow: visible;
+    text-align: left;
+    align-self: auto;
+  }
+  .dash-table .dash-head .dash-direction { order: -2; }
+  .dash-table .dash-head .dash-direction::before {
+    content: "Sort";
+    color: var(--text);
+    display: inline-block;
+    line-height: 20px;
+    padding: 12px 0;
+  }
+  .dash-table .dash-head .dash-metric { order: -1; }
+
+  .dash-pager { padding: 0 16px; }
+
+  .dash-about { line-height: 1.5; }
+}
+
+/* Touch screens wider than a phone (landscape phones, tablets): the same 44px hit boxes, grown outward with a
+   negative vertical margin so the desktop layout does not move. Mouse-driven desktops are unaffected. */
+@media (min-width: 640px) and (pointer: coarse) {
+  .dash-nav a,
+  .dash-toggle a,
+  .dash-pager a,
+  .dash-status a,
+  .dash-head .dash-sort {
+    display: inline-block;
+    line-height: 20px;
+    padding: 12px 4px;
+    margin: -12px -4px;
+  }
+  .dash-row a { display: inline-block; padding: 14px 4px; margin: -14px -4px; max-width: 100%; }
+  .dash-logo { padding: 11px 4px; margin: -11px -4px; }
 }

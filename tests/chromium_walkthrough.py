@@ -498,6 +498,17 @@ class UIWalkthrough:
                 return {selector, left: rect.left, right: rect.right, width: rect.width,
                   fits: rect.left >= -1 && rect.right <= innerWidth + 1};
               });
+              // Every plain-text control on a phone must be a 44px-tall hit box; hidden groups (the pager on a
+              // one-page list, the Movers toggles off the Movers view) have no client rects and are skipped.
+              const tapTargets = ['#dashNav a', '#dashSide a', '#dashHorizon a', '#dashPager a', '#dashHead th a']
+                .flatMap(selector => [...document.querySelectorAll(selector)]
+                  .filter(link => link.getClientRects().length > 0)
+                  .map(link => {
+                    const rect = link.getBoundingClientRect();
+                    return {selector, text: link.textContent.trim(), width: rect.width, height: rect.height};
+                  }));
+              const head = document.querySelector('#dashHead');
+              const headRect = head ? head.getBoundingClientRect() : null;
               const overflowers = [...document.querySelectorAll('body *')].map(element => {
                 const rect = element.getBoundingClientRect();
                 return {element: describe(element), left: rect.left, right: rect.right, width: rect.width};
@@ -514,6 +525,10 @@ class UIWalkthrough:
                 controlsVisible: document.querySelector('#dashControls')?.hidden === false,
                 aboutVisible: document.querySelector('#dashAbout')?.hidden === false,
                 navLinks: [...document.querySelectorAll('#dashNav a')].map(link => link.dataset.view),
+                tapTargets,
+                smallTapTargets: tapTargets.filter(target => target.height < 44),
+                headVisible: Boolean(headRect && headRect.width > 0 && headRect.height > 0
+                  && document.querySelector('#dashTable')?.hidden === false),
                 activeElement: document.activeElement?.id || `${document.activeElement?.tagName}.${document.activeElement?.className}`,
               };
             })()"""
@@ -531,6 +546,23 @@ class UIWalkthrough:
                 f"dashboard {name} viewport ({view}) has no rows, a visible status line, or the wrong panels shown: {result}")
         if result["navLinks"] != ["holdings", "initiations", "movers", "about"]:
             self.viewport_failures.append(f"dashboard {name} viewport has an unexpected nav: {result['navLinks']}")
+        if mobile:
+            # The phone layout: the sortable headers collapse into one visible line of sort links, and every
+            # header link, Movers toggle, pager link, and sort link is at least 44px tall.
+            measured = {selector: sum(1 for target in result["tapTargets"] if target["selector"] == selector)
+                        for selector in ("#dashNav a", "#dashSide a", "#dashHorizon a", "#dashPager a", "#dashHead th a")}
+            required = {"#dashNav a": 4, "#dashHead th a": 7}
+            if view == "movers":
+                required.update({"#dashSide a": 2, "#dashHorizon a": 4})
+            missing = {selector: count for selector, count in required.items() if measured.get(selector, 0) < count}
+            if missing:
+                self.viewport_failures.append(
+                    f"dashboard {name} viewport ({view}) did not expose every phone control for measurement: {measured}")
+            if result["smallTapTargets"]:
+                self.viewport_failures.append(
+                    f"dashboard {name} viewport has tap targets shorter than 44px: {result['smallTapTargets']}")
+            if not result["headVisible"]:
+                self.viewport_failures.append(f"dashboard {name} viewport ({view}) hides the compact sort line: {result}")
 
     def dashboard_sorting(self) -> None:
         """Column headers on Top Holdings: Ticker starts ascending, a second click flips it, and the metric
@@ -663,6 +695,18 @@ class UIWalkthrough:
         cdp.wait_for("table restored after About", "document.querySelector('#dashTable')?.hidden === false && document.querySelector('#dashAbout')?.hidden === true")
         cdp.wait_for("holdings URL after About", "location.pathname === '/' && !location.search")
 
+    def dashboard_phone_movers(self) -> None:
+        """Top Movers reloaded at two phone widths: the compact sort line, the wrapped toggles, and 44px-tall hit
+        boxes on every plain-text control, with no horizontal overflow."""
+        cdp = self.cdp
+        mark = len(cdp.responses)
+        cdp.click('#dashNav a[data-view="movers"]')
+        expected = {"view": "movers", "horizon": "1", "side": "gainers", "page": "1"}
+        cdp.wait_for_api("/api/dashboard", mark, expected)
+        self.dashboard_ready("movers")
+        for name, width, height in (("mobile-movers", 375, 812), ("mobile-360", 360, 740)):
+            self.dashboard_viewport_check(name, width, height, True, view="movers", expected=expected)
+
     def run(self) -> None:
         cdp = self.cdp
         cdp.command("Runtime.enable")
@@ -677,6 +721,7 @@ class UIWalkthrough:
         self.step("Check the dashboard mobile viewport",
                   lambda: self.dashboard_viewport_check("mobile", 375, 812, True, view="holdings",
                                                         expected={"view": "holdings", "page": "1"}))
+        self.step("Check the Top Movers phone viewports", self.dashboard_phone_movers)
 
         cdp.evaluate("true")
         if cdp.console_failures or cdp.page_failures or cdp.network_failures or self.viewport_failures:
