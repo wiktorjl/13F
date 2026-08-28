@@ -99,26 +99,59 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
 .dash-sep { color: var(--accent); }
 .dash-horizon { margin-left: auto; }
 
-/* Table: header and body columns share the table's auto layout, so labels sit over their values. Only
-   horizontal 1px rules; no vertical lines, no header background, no bold header text. The shared cell rules use
-   :where() so the per-column rules below and the narrow-screen block can override them by source order. */
+/* List: an ARIA table of divs. On desktop it is a grid whose header, row group and rows are column subgrids, so
+   labels sit over their values and the name column takes the slack exactly as a table's auto layout would.
+   Every cell names its own column, so the DOM order (cells grouped into three lines for phones) is irrelevant
+   here. Only horizontal 1px rules; no vertical lines, no header background, no bold header text. */
 .dash-table {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto auto;
+  column-gap: 24px;
   width: 100%;
-  border-collapse: collapse;
-  border-spacing: 0;
+}
+.dash-rows {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
 }
 .dash-rows:focus { outline: none; }
-.dash-table tr { border-bottom: 1px solid var(--rule); }
-.dash-table :where(th, td) {
-  padding: 12px 0 12px 24px;
-  vertical-align: baseline;
+.dash-head,
+.dash-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.dash-line { display: contents; }
+/* grid-row: 1 keeps every cell on its row's single line: with explicit columns alone, auto-placement would start a
+   new row for a cell whose column lies before the placement cursor (the direction glyph after the ticker). */
+.dash-cell {
+  grid-row: 1;
   text-align: left;
   font-weight: 400;
   white-space: nowrap;
 }
-.dash-table :where(th, td):where(:first-child) { padding-left: 16px; }
-.dash-table :where(th, td):where(:last-child) { padding-right: 16px; }
-.dash-table th { font-size: 14px; color: var(--accent); }
+.dash-direction { grid-column: 1; }
+.dash-ticker { grid-column: 2; }
+.dash-name { grid-column: 3; }
+.dash-metric { grid-column: 4; }
+.dash-price { grid-column: 5; }
+.dash-day { grid-column: 6; }
+.dash-ytd { grid-column: 7; }
+.dash-sector { grid-column: 8; }
+/* Without subgrid support every row sizes its own columns, so fall back to fixed tracks that stay aligned. */
+@supports not (grid-template-columns: subgrid) {
+  .dash-table,
+  .dash-rows { display: block; }
+  .dash-head,
+  .dash-row {
+    grid-template-columns: 16px 64px minmax(0, 1fr) 112px 80px 56px 56px 40px;
+    column-gap: 24px;
+  }
+}
+.dash-head .dash-cell { font-size: 14px; color: var(--accent); }
 .dash-sort {
   color: var(--accent);
   text-decoration: none;
@@ -145,42 +178,40 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
 .dash-row a:hover,
 .dash-row a:focus-visible { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 
-.dash-table .dash-direction { font-size: 14px; text-align: center; }
-.dash-table .dash-direction.up { color: var(--positive); }
-.dash-table .dash-direction.down { color: var(--negative); }
-.dash-table .dash-direction.flat { color: var(--accent); }
+.dash-direction { font-size: 14px; text-align: center; }
+.dash-direction.up { color: var(--positive); }
+.dash-direction.down { color: var(--negative); }
+.dash-direction.flat { color: var(--accent); }
 
-.dash-table td.dash-ticker {
+.dash-row .dash-ticker {
   font-size: 14px;
   font-weight: 700;
   text-transform: uppercase;
 }
-.dash-table td.dash-ticker.dash-missing { color: var(--accent); font-weight: 400; }
-/* The name takes whatever width the fixed-content columns leave and ellipsises: width:100% claims the slack,
-   max-width:0 stops long names from widening the column. */
-.dash-table .dash-name {
-  width: 100%;
-  max-width: 0;
+.dash-row .dash-ticker.dash-missing { color: var(--accent); font-weight: 400; }
+/* The name column is the flexible track: the cell ellipsises instead of widening it. */
+.dash-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.dash-table td.dash-name { font-size: 16px; }
-.dash-table .dash-metric,
-.dash-table .dash-price,
-.dash-table .dash-day,
-.dash-table .dash-ytd {
+.dash-row .dash-name { font-size: 16px; }
+.dash-metric,
+.dash-price,
+.dash-day,
+.dash-ytd {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.dash-table td.dash-metric { font-size: 16px; font-weight: 700; }
-.dash-table td.dash-price,
-.dash-table td.dash-day,
-.dash-table td.dash-ytd { font-size: 14px; }
-.dash-table td.dash-price { color: var(--accent); }
-.dash-table td.dash-day.positive, .dash-table td.dash-ytd.positive { color: var(--positive); }
-.dash-table td.dash-day.negative, .dash-table td.dash-ytd.negative { color: var(--negative); }
-.dash-table td.dash-day.neutral, .dash-table td.dash-ytd.neutral { color: var(--accent); }
-.dash-table td.dash-sector {
+.dash-row .dash-metric { font-size: 16px; font-weight: 700; }
+.dash-row .dash-price,
+.dash-row .dash-day,
+.dash-row .dash-ytd { font-size: 14px; }
+.dash-row .dash-price { color: var(--accent); }
+.dash-row .dash-day.positive, .dash-row .dash-ytd.positive { color: var(--positive); }
+.dash-row .dash-day.negative, .dash-row .dash-ytd.negative { color: var(--negative); }
+.dash-row .dash-day.neutral, .dash-row .dash-ytd.neutral { color: var(--accent); }
+.dash-row .dash-sector {
   font-size: 14px;
   color: var(--accent);
   overflow: hidden;
@@ -221,110 +252,171 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
 .dash-about p { margin: 0 0 12px; }
 .dash-about p:last-child { margin-bottom: 0; }
 
-/* Phones (under 640px): two lines per row, never a horizontal page scroll. Every control keeps its 14px text but
-   becomes a 44px-tall hit box: inline-block with a 20px line and 12px of vertical padding, plus 4px of horizontal
-   padding that a matching negative margin pulls back so the text sits exactly where the desktop layout put it. */
+/* Phones (under 640px): a native-feeling list, not the desktop table squeezed. A sticky header (logo line, then
+   a sideways-scrolling tab row), one 44px row each for the Movers toggles and the sort links (also scrolling
+   sideways instead of wrapping), and three-line rows. Every control is a 44px-tall hit box; scrollbars are hidden
+   on the two scrolling rows. */
 @media (max-width: 639.98px) {
-  .dash-nav a,
-  .dash-toggle a,
-  .dash-pager a,
-  .dash-head .dash-sort {
-    display: inline-block;
-    line-height: 20px;
-    padding: 12px 4px;
+  .dash-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: block;
+    padding: 0;
+    background: var(--bg);
+  }
+  .dash-logo {
+    display: flex;
+    align-items: center;
+    height: 48px;
+    padding: 0 16px;
+  }
+  .dash-nav {
+    flex-wrap: nowrap;
+    gap: 20px;
+    padding: 0 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .dash-nav::-webkit-scrollbar { display: none; }
+  .dash-nav a {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    height: 44px;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+  }
+  .dash-nav a:hover,
+  .dash-nav a:focus-visible,
+  .dash-nav a.active { text-decoration: none; }
+  .dash-nav a.active { border-bottom-color: var(--text); }
+
+  /* Movers controls: Gainers | Losers left, 1Q 2Q 3Q 4Q right, one 44px row over a rule. The timeframe links are
+     44x44 boxes with the label centred; the nav's negative margin keeps "4Q" near the 16px column edge. */
+  .dash-controls {
+    box-sizing: content-box;
+    justify-content: space-between;
+    gap: 16px;
+    height: 44px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .dash-side a {
+    display: inline-flex;
+    align-items: center;
+    height: 44px;
+    padding: 0 4px;
     margin: 0 -4px;
   }
-  /* Row links and the logo are the remaining per-row / header tap targets: grow the hit box
-     symmetrically so the text stays exactly where it is. */
-  .dash-row a { display: inline-block; padding: 14px 4px; margin: -14px -4px; max-width: 100%; vertical-align: top; }
-  .dash-row .dash-name a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dash-logo { padding: 11px 4px; margin: -11px -4px; }
+  .dash-horizon { margin: 0 -12px 0 0; gap: 0; }
+  .dash-horizon a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  /* Sort row: "Sort" then the seven sort links on one 44px line that scrolls sideways. The header cells are
+     direct flex children (no line wrappers in the header); the empty direction cell carries the caption. */
+  .dash-table,
+  .dash-rows { display: block; }
+  .dash-head {
+    box-sizing: content-box;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    height: 44px;
+    padding: 0 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .dash-head::-webkit-scrollbar { display: none; }
+  .dash-head .dash-cell {
+    flex: 0 0 auto;
+    min-width: 0;
+    overflow: visible;
+    text-align: left;
+  }
+  .dash-head .dash-direction::before { content: "Sort"; color: var(--text); }
+  .dash-head .dash-sort {
+    display: inline-flex;
+    align-items: center;
+    height: 44px;
+  }
+  .dash-sort-glyph { width: auto; }
+
+  /* Rows: three flex lines. 1: ticker, direction glyph, metric. 2: name, sector. 3: price, day, YTD with taupe
+     labels. The ticker and name links stay 44px-tall hit boxes: the cell and its link both carry the vertical
+     padding and pull it back with a negative margin, so the clipping cell is as tall as the link. */
+  .dash-row {
+    display: block;
+    padding: 14px 16px;
+  }
+  .dash-line { display: flex; align-items: baseline; }
+  .dash-line-1 { gap: 8px; line-height: 22px; }
+  .dash-line-2 { gap: 16px; margin-top: 2px; line-height: 20px; }
+  .dash-line-3 { flex-wrap: wrap; gap: 0 16px; margin-top: 6px; line-height: 20px; }
+  .dash-row .dash-cell { flex: 0 0 auto; min-width: 0; }
+  .dash-row .dash-ticker {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 11px 0;
+    margin: -11px 0;
+    font-size: 16px;
+    color: var(--text);
+  }
+  .dash-row .dash-ticker.dash-missing { color: var(--accent); }
+  .dash-row .dash-direction { text-align: left; }
+  .dash-row .dash-metric { text-align: right; }
+  .dash-row .dash-name {
+    flex: 1 1 auto;
+    padding: 12px 0;
+    margin: -12px 0;
+    font-size: 14px;
+    color: var(--accent);
+  }
+  .dash-row .dash-sector { overflow: visible; text-align: right; }
+  .dash-row .dash-price { color: var(--text); }
+  .dash-row .dash-price,
+  .dash-row .dash-day,
+  .dash-row .dash-ytd { text-align: left; }
+  .dash-row .dash-day:not(.unpriced)::after { content: " today"; color: var(--accent); }
+  .dash-row .dash-ytd:not(.unpriced)::after { content: " YTD"; color: var(--accent); }
+  .dash-row .dash-ticker a,
+  .dash-row .dash-name a {
+    display: inline-block;
+    max-width: calc(100% + 8px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: top;
+    padding: 11px 4px;
+    margin: -11px -4px;
+  }
+  .dash-row .dash-name a { padding: 12px 4px; margin: -12px -4px; }
+
+  /* Pager: Previous left, Next right, 44px targets. The status line's retry link grows the same way. */
+  .dash-pager { gap: 16px; padding: 0 16px; }
+  .dash-pager a {
+    display: inline-flex;
+    align-items: center;
+    height: 44px;
+    padding: 0 4px;
+    margin: 0 -4px;
+  }
   .dash-status a {
     display: inline-block;
     line-height: 20px;
     padding: 12px 4px;
     margin: -12px -4px;
   }
-
-  /* Header: the logo on its own line, the four view links in one row below it (wrapping again only when the
-     width forces it, e.g. 320px). */
-  .dash-header { flex-wrap: wrap; gap: 0 16px; padding: 8px 16px 4px; }
-  .dash-nav { flex-basis: 100%; gap: 0 12px; }
-
-  /* Movers controls: Gainers | Losers and 1Q–4Q share a line when they fit and otherwise take one line each,
-     left-aligned. The timeframe links are centred in 44px-wide boxes; the nav's negative margin keeps the first
-     and last labels near the 16px column edge. */
-  .dash-controls {
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 0 24px;
-    padding: 0 16px;
-  }
-  .dash-horizon { margin: 0 -12px; gap: 0; }
-  .dash-horizon a {
-    min-width: 44px;
-    padding: 12px 0;
-    margin: 0;
-    text-align: center;
-  }
-
-  /* Table: blocks instead of table layout; each row is a two-line grid (ticker, name, metric / price, day, ytd,
-     sector) with the metric bold and right-aligned. */
-  .dash-table,
-  .dash-table thead,
-  .dash-table tbody { display: block; width: 100%; }
-  .dash-table tr {
-    display: grid;
-    grid-template-columns: 16px auto minmax(0, 1fr) auto auto;
-    grid-template-areas:
-      "dir ticker name metric metric"
-      "dir price day ytd sector";
-    column-gap: 16px;
-    row-gap: 4px;
-    align-items: baseline;
-    padding: 12px 16px;
-  }
-  .dash-table th,
-  .dash-table td { display: block; min-width: 0; padding: 0; }
-  .dash-sort-glyph { width: auto; }
-  .dash-table .dash-name { width: auto; max-width: none; }
-  .dash-table .dash-direction { grid-area: dir; align-self: start; }
-  .dash-table .dash-ticker { grid-area: ticker; }
-  .dash-table .dash-name { grid-area: name; }
-  .dash-table .dash-metric { grid-area: metric; }
-  .dash-table .dash-price { grid-area: price; }
-  .dash-table .dash-day { grid-area: day; text-align: left; }
-  .dash-table .dash-ytd { grid-area: ytd; }
-  .dash-table .dash-sector { grid-area: sector; }
-
-  /* The column headers become one wrapping line of plain-text sort links: "Sort", the view's metric first, then
-     the other columns in table order. The two-line rows are self-explanatory, so the labels no longer need to
-     sit over the columns. The empty direction header carries the "Sort" caption. */
-  .dash-table .dash-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0 16px;
-    padding: 0 16px;
-  }
-  .dash-table .dash-head th {
-    width: auto;
-    max-width: none;
-    overflow: visible;
-    text-align: left;
-    align-self: auto;
-  }
-  .dash-table .dash-head .dash-direction { order: -2; }
-  .dash-table .dash-head .dash-direction::before {
-    content: "Sort";
-    color: var(--text);
-    display: inline-block;
-    line-height: 20px;
-    padding: 12px 0;
-  }
-  .dash-table .dash-head .dash-metric { order: -1; }
-
-  .dash-pager { padding: 0 16px; }
 
   .dash-about { line-height: 1.5; }
 }

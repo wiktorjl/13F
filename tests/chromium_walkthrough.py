@@ -500,7 +500,7 @@ class UIWalkthrough:
               });
               // Every plain-text control on a phone must be a 44px-tall hit box; hidden groups (the pager on a
               // one-page list, the Movers toggles off the Movers view) have no client rects and are skipped.
-              const tapTargets = ['#dashNav a', '#dashSide a', '#dashHorizon a', '#dashPager a', '#dashHead th a']
+              const tapTargets = ['#dashNav a', '#dashSide a', '#dashHorizon a', '#dashPager a', '#dashHead [data-sort] a']
                 .flatMap(selector => [...document.querySelectorAll(selector)]
                   .filter(link => link.getClientRects().length > 0)
                   .map(link => {
@@ -509,6 +509,18 @@ class UIWalkthrough:
                   }));
               const head = document.querySelector('#dashHead');
               const headRect = head ? head.getBoundingClientRect() : null;
+              // The phone layout: a sticky header block, a sort row that scrolls sideways on one 44px line instead
+              // of wrapping, three .dash-line children per row (each with a height), and 44px-tall row links.
+              const header = document.querySelector('.dash-header');
+              const headerSticky = Boolean(header) && getComputedStyle(header).position === 'sticky';
+              const headSingleLine = Boolean(head && headRect && (head.scrollWidth > head.clientWidth || headRect.height <= 46));
+              const rowLines = [...document.querySelectorAll('#dashRows .dash-row')].map(row =>
+                [...row.querySelectorAll(':scope > .dash-line')].map(line => line.getBoundingClientRect().height));
+              const badRows = rowLines.filter(heights => heights.length !== 3 || heights.some(height => !(height > 0))).length;
+              const rowLinks = [...document.querySelectorAll('#dashRows .dash-row a')].map(link => {
+                const rect = link.getBoundingClientRect();
+                return {text: link.textContent.trim().slice(0, 24), height: rect.height};
+              });
               const overflowers = [...document.querySelectorAll('body *')].map(element => {
                 const rect = element.getBoundingClientRect();
                 return {element: describe(element), left: rect.left, right: rect.right, width: rect.width};
@@ -529,6 +541,9 @@ class UIWalkthrough:
                 smallTapTargets: tapTargets.filter(target => target.height < 44),
                 headVisible: Boolean(headRect && headRect.width > 0 && headRect.height > 0
                   && document.querySelector('#dashTable')?.hidden === false),
+                headerSticky, headSingleLine, badRows, rowLineCount: rowLines.length,
+                rowLinkCount: rowLinks.length,
+                smallRowLinks: rowLinks.filter(link => link.height < 44).slice(0, 10),
                 activeElement: document.activeElement?.id || `${document.activeElement?.tagName}.${document.activeElement?.className}`,
               };
             })()"""
@@ -550,8 +565,8 @@ class UIWalkthrough:
             # The phone layout: the sortable headers collapse into one visible line of sort links, and every
             # header link, Movers toggle, pager link, and sort link is at least 44px tall.
             measured = {selector: sum(1 for target in result["tapTargets"] if target["selector"] == selector)
-                        for selector in ("#dashNav a", "#dashSide a", "#dashHorizon a", "#dashPager a", "#dashHead th a")}
-            required = {"#dashNav a": 4, "#dashHead th a": 7}
+                        for selector in ("#dashNav a", "#dashSide a", "#dashHorizon a", "#dashPager a", "#dashHead [data-sort] a")}
+            required = {"#dashNav a": 4, "#dashHead [data-sort] a": 7}
             if view == "movers":
                 required.update({"#dashSide a": 2, "#dashHorizon a": 4})
             missing = {selector: count for selector, count in required.items() if measured.get(selector, 0) < count}
@@ -563,6 +578,17 @@ class UIWalkthrough:
                     f"dashboard {name} viewport has tap targets shorter than 44px: {result['smallTapTargets']}")
             if not result["headVisible"]:
                 self.viewport_failures.append(f"dashboard {name} viewport ({view}) hides the compact sort line: {result}")
+            if not result["headerSticky"]:
+                self.viewport_failures.append(f"dashboard {name} viewport ({view}) header is not sticky: {result}")
+            if not result["headSingleLine"]:
+                self.viewport_failures.append(
+                    f"dashboard {name} viewport ({view}) sort row wraps instead of scrolling sideways: {result}")
+            if result["badRows"] or not result["rowLineCount"]:
+                self.viewport_failures.append(
+                    f"dashboard {name} viewport ({view}) has rows without three laid-out lines: {result}")
+            if result["smallRowLinks"] or not result["rowLinkCount"]:
+                self.viewport_failures.append(
+                    f"dashboard {name} viewport ({view}) has row links shorter than 44px: {result['smallRowLinks']}")
 
     def dashboard_sorting(self) -> None:
         """Column headers on Top Holdings: Ticker starts ascending, a second click flips it, and the metric
@@ -572,13 +598,13 @@ class UIWalkthrough:
                    ".map(node => node.textContent.trim().toUpperCase()).filter(text => text && text !== '\u2014')")
 
         def header_sort(column: str) -> str:
-            return f"document.querySelector('#dashHead th[data-sort=\"{column}\"]')?.getAttribute('aria-sort')"
+            return f"document.querySelector('#dashHead [data-sort=\"{column}\"]')?.getAttribute('aria-sort')"
 
         def glyph(column: str) -> str:
-            return f"document.querySelector('#dashHead th[data-sort=\"{column}\"] a.dash-sort.active')?.textContent.trim().slice(-1)"
+            return f"document.querySelector('#dashHead [data-sort=\"{column}\"] a.dash-sort.active')?.textContent.trim().slice(-1)"
 
         mark = len(cdp.responses)
-        cdp.click('#dashHead th[data-sort="ticker"] a')
+        cdp.click('#dashHead [data-sort="ticker"] a')
         cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "sort": "ticker", "direction": "asc", "page": "1"})
         self.dashboard_ready("holdings")
         cdp.wait_for("ticker header ascending", f"{header_sort('ticker')} === 'ascending' && {header_sort('metric')} === 'none' && {glyph('ticker')} === '\u2191'")
@@ -586,7 +612,7 @@ class UIWalkthrough:
         cdp.wait_for("ticker ascending URL", "location.pathname === '/' && location.search === '?sort=ticker&direction=asc'")
 
         mark = len(cdp.responses)
-        cdp.click('#dashHead th[data-sort="ticker"] a')
+        cdp.click('#dashHead [data-sort="ticker"] a')
         cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "sort": "ticker", "direction": "desc", "page": "1"})
         self.dashboard_ready("holdings")
         cdp.wait_for("ticker header descending", f"{header_sort('ticker')} === 'descending' && {glyph('ticker')} === '\u2193'")
@@ -594,7 +620,7 @@ class UIWalkthrough:
         cdp.wait_for("ticker descending URL", "location.pathname === '/' && location.search === '?sort=ticker'")
 
         mark = len(cdp.responses)
-        cdp.click('#dashHead th[data-sort="metric"] a')
+        cdp.click('#dashHead [data-sort="metric"] a')
         response = cdp.wait_for_api("/api/dashboard", mark, {"view": "holdings", "page": "1", "size": "100"})
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(response["url"]).query)
         if "sort" in query or "direction" in query:

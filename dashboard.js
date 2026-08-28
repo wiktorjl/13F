@@ -119,18 +119,29 @@ function rowHtml(row, view) {
   const [glyph, label] = DIRECTIONS.get(direction);
   const name = displayName(row.name, row.issuer);
   const href = ticker ? esc(yahooUrl(ticker)) : '';
+  const price = toNumber(row.price);
   const day = displayPct(row.day_change);
   const ytd = displayPct(row.ytd_change);
-  return `<tr class="dash-row" data-cusip="${esc(row.cusip)}">
-    <td class="dash-direction ${direction}" aria-label="${label}">${glyph}</td>
-    ${ticker ? `<td class="dash-ticker"><a href="${href}" target="_blank" rel="noreferrer">${esc(ticker)}</a></td>` : '<td class="dash-ticker dash-missing">—</td>'}
-    <td class="dash-name">${ticker ? `<a href="${href}" target="_blank" rel="noreferrer">${esc(name)}</a>` : esc(name)}</td>
-    <td class="dash-metric">${esc(fmtMetric(view, row.metric, direction))}</td>
-    <td class="dash-price">${esc(fmtPrice(toNumber(row.price)))}</td>
-    <td class="dash-day ${changeClass(day)}">${esc(fmtPct(day))}</td>
-    <td class="dash-ytd ${changeClass(ytd)}">${esc(fmtPct(ytd))}</td>
-    <td class="dash-sector">${esc(sectorAbbreviation(row.sector))}</td>
-  </tr>`;
+  // `unpriced` marks the "—" cells so the phone layout can drop its " today" / " YTD" suffixes.
+  const unpriced = (value) => value == null ? ' unpriced' : '';
+  // One DOM for both layouts: the cells are grouped into three lines for phones; on desktop the lines are
+  // display: contents and every cell is placed in its own grid column by class, so this order is irrelevant there.
+  return `<div class="dash-row" role="row" data-cusip="${esc(row.cusip)}">
+    <div class="dash-line dash-line-1" role="presentation">
+      ${ticker ? `<span class="dash-cell dash-ticker" role="cell"><a href="${href}" target="_blank" rel="noreferrer">${esc(ticker)}</a></span>` : '<span class="dash-cell dash-ticker dash-missing" role="cell">—</span>'}
+      <span class="dash-cell dash-direction ${direction}" role="cell" aria-label="${label}">${glyph}</span>
+      <span class="dash-cell dash-metric" role="cell">${esc(fmtMetric(view, row.metric, direction))}</span>
+    </div>
+    <div class="dash-line dash-line-2" role="presentation">
+      <span class="dash-cell dash-name" role="cell">${ticker ? `<a href="${href}" target="_blank" rel="noreferrer">${esc(name)}</a>` : esc(name)}</span>
+      <span class="dash-cell dash-sector" role="cell">${esc(sectorAbbreviation(row.sector))}</span>
+    </div>
+    <div class="dash-line dash-line-3" role="presentation">
+      <span class="dash-cell dash-price${unpriced(price)}" role="cell">${esc(fmtPrice(price))}</span>
+      <span class="dash-cell dash-day ${changeClass(day)}${unpriced(day)}" role="cell">${esc(fmtPct(day))}</span>
+      <span class="dash-cell dash-ytd ${changeClass(ytd)}${unpriced(ytd)}" role="cell">${esc(fmtPct(ytd))}</span>
+    </div>
+  </div>`;
 }
 
 async function api(path, params = '') {
@@ -266,7 +277,7 @@ function renderChrome() {
 }
 
 function renderHead() {
-  $$('#dashHead th[data-sort]').forEach(cell => {
+  $$('#dashHead [data-sort]').forEach(cell => {
     const sort = cell.dataset.sort;
     const active = sort === state.sort;
     const link = $('a', cell);
