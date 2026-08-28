@@ -295,6 +295,22 @@ function renderHead() {
     link.href = routeUrl(sortRoute(sort));
     cell.setAttribute('aria-sort', active ? (state.direction === 'asc' ? 'ascending' : 'descending') : 'none');
   });
+  revealActiveSort();
+}
+
+// On phones #dashHead is one sideways-scrolling line: bring the active sort link inside its side padding by
+// scrolling the row itself, never the document. Desktop's header does not scroll, so this is a no-op there.
+function revealActiveSort() {
+  const head = $('#dashHead');
+  const cell = $('[data-sort] .dash-sort.active', head)?.closest('[data-sort]');
+  if (!cell || head.scrollWidth <= head.clientWidth) return;
+  const style = getComputedStyle(head);
+  const headRect = head.getBoundingClientRect();
+  const rect = cell.getBoundingClientRect();
+  const right = headRect.right - parseFloat(style.paddingRight);
+  const left = headRect.left + parseFloat(style.paddingLeft);
+  if (rect.right > right) head.scrollLeft += Math.ceil(rect.right - right);
+  else if (rect.left < left) head.scrollLeft -= Math.ceil(left - rect.left);
 }
 
 function setStatus(text, error = false) {

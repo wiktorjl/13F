@@ -147,11 +147,13 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
   .dash-rows { display: block; }
   .dash-head,
   .dash-row {
-    grid-template-columns: 16px 64px minmax(0, 1fr) 112px 80px 56px 56px 40px;
-    column-gap: 24px;
+    grid-template-columns: 14px 62px minmax(0, 1fr) 96px 62px 40px 48px 40px;
+    column-gap: 16px;
   }
 }
 .dash-head .dash-cell { font-size: 14px; color: var(--accent); }
+/* The phone sort row's "Sort" caption; desktop has column headers instead. */
+.dash-sort-caption { display: none; }
 .dash-sort {
   color: var(--accent);
   text-decoration: none;
@@ -273,7 +275,7 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
   }
   .dash-nav {
     flex-wrap: nowrap;
-    gap: 20px;
+    gap: 16px;
     padding: 0 16px;
     overflow-x: auto;
     overflow-y: hidden;
@@ -320,8 +322,9 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
     height: 44px;
   }
 
-  /* Sort row: "Sort" then the seven sort links on one 44px line that scrolls sideways. The header cells are
-     direct flex children (no line wrappers in the header); the empty direction cell carries the caption. */
+  /* Sort row: the "Sort" caption then the seven sort links on one 44px line that scrolls sideways (renderHead()
+     scrolls the active link into view). The header cells are direct flex children in row-cell order, no line
+     wrappers; the caption is a desktop-hidden span, not a cell. */
   .dash-table,
   .dash-rows { display: block; }
   .dash-head {
@@ -343,7 +346,15 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
     overflow: visible;
     text-align: left;
   }
-  .dash-head .dash-direction::before { content: "Sort"; color: var(--text); }
+  .dash-head .dash-sort-caption {
+    display: block;
+    flex: 0 0 auto;
+    font-size: 14px;
+    color: var(--text);
+  }
+  /* The direction header has no label; pulling the empty cell back by one gap keeps a single 20px gap between
+     Ticker and the metric link while the cell stays in the accessibility tree. */
+  .dash-head .dash-direction { margin-left: -20px; }
   .dash-head .dash-sort {
     display: inline-flex;
     align-items: center;
@@ -353,7 +364,8 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
 
   /* Rows: three flex lines. 1: ticker, direction glyph, metric. 2: name, sector. 3: price, day, YTD with taupe
      labels. The ticker and name links stay 44px-tall hit boxes: the cell and its link both carry the vertical
-     padding and pull it back with a negative margin, so the clipping cell is as tall as the link. */
+     padding and pull it back with a negative margin, so the cell is as tall as the link. The cells do not clip
+     (that cut the focus ring); the link ellipsises itself. */
   .dash-row {
     display: block;
     padding: 14px 16px;
@@ -365,8 +377,7 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
   .dash-row .dash-cell { flex: 0 0 auto; min-width: 0; }
   .dash-row .dash-ticker {
     flex: 1 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
     padding: 11px 0;
     margin: -11px 0;
     font-size: 16px;
@@ -374,16 +385,24 @@ a { color: inherit; -webkit-tap-highlight-color: rgba(140, 123, 107, 0.18); }
   }
   .dash-row .dash-ticker.dash-missing { color: var(--accent); }
   .dash-row .dash-direction { text-align: left; }
+  /* An em dash next to the metric reads as a minus sign on a phone: the unchanged glyph keeps its cell (and the
+     "Unchanged" label) but is not painted. */
+  .dash-row .dash-direction.flat { color: transparent; }
   .dash-row .dash-metric { text-align: right; }
   .dash-row .dash-name {
     flex: 1 1 auto;
+    overflow: visible;
     padding: 12px 0;
     margin: -12px 0;
     font-size: 14px;
     color: var(--accent);
   }
+  /* A name without a link (unmapped rows) has nothing else to ellipsise it. */
+  .dash-row .dash-name:not(:has(> a)) { overflow: hidden; text-overflow: ellipsis; }
   .dash-row .dash-sector { overflow: visible; text-align: right; }
   .dash-row .dash-price { color: var(--text); }
+  /* Unpriced rows show three dashes in one colour (day/YTD dashes are .neutral, already taupe). */
+  .dash-row .dash-price.unpriced { color: var(--accent); }
   .dash-row .dash-price,
   .dash-row .dash-day,
   .dash-row .dash-ytd { text-align: left; }

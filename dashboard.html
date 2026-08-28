@@ -31,14 +31,15 @@
     </div>
     <div id="dashTable" class="dash-table" role="table" aria-label="Stocks">
       <div id="dashHead" class="dash-head" role="row">
-        <span class="dash-cell dash-direction" role="columnheader" aria-label="Direction"></span>
+        <span class="dash-sort-caption" aria-hidden="true">Sort</span>
         <span class="dash-cell dash-ticker" role="columnheader" data-sort="ticker" aria-sort="none"><a href="/?sort=ticker&amp;direction=asc" class="dash-sort">Ticker</a></span>
-        <span class="dash-cell dash-name" role="columnheader" data-sort="name" aria-sort="none"><a href="/?sort=name&amp;direction=asc" class="dash-sort">Name</a></span>
+        <span class="dash-cell dash-direction" role="columnheader" aria-label="Direction"></span>
         <span class="dash-cell dash-metric" role="columnheader" data-sort="metric" aria-sort="descending"><a href="/" class="dash-sort active">Avg Weight</a></span>
+        <span class="dash-cell dash-name" role="columnheader" data-sort="name" aria-sort="none"><a href="/?sort=name&amp;direction=asc" class="dash-sort">Name</a></span>
+        <span class="dash-cell dash-sector" role="columnheader" data-sort="sector" aria-sort="none"><a href="/?sort=sector&amp;direction=asc" class="dash-sort">Sector</a></span>
         <span class="dash-cell dash-price" role="columnheader" data-sort="price" aria-sort="none"><a href="/?sort=price" class="dash-sort">Price</a></span>
         <span class="dash-cell dash-day" role="columnheader" data-sort="day" aria-sort="none"><a href="/?sort=day" class="dash-sort">Day</a></span>
         <span class="dash-cell dash-ytd" role="columnheader" data-sort="ytd" aria-sort="none"><a href="/?sort=ytd" class="dash-sort">YTD</a></span>
-        <span class="dash-cell dash-sector" role="columnheader" data-sort="sector" aria-sort="none"><a href="/?sort=sector&amp;direction=asc" class="dash-sort">Sector</a></span>
       </div>
       <div id="dashRows" class="dash-rows" role="rowgroup"></div>
     </div>
