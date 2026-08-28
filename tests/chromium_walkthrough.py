@@ -729,7 +729,7 @@ class UIWalkthrough:
         cdp.wait_for_api("/api/dashboard", mark, {"view": "initiations", "page": "1"})
         self.dashboard_ready("initiations")
         cdp.wait_for("new-holder metrics", "[...document.querySelectorAll('#dashRows .dash-metric')].every(node => node.textContent.endsWith(' new'))")
-        cdp.wait_for("flat initiation directions", "[...document.querySelectorAll('#dashRows .dash-direction')].every(node => node.classList.contains('flat'))")
+        cdp.wait_for("initiation directions", "[...document.querySelectorAll('#dashRows .dash-direction')].every(node => ['up', 'down', 'flat'].some(name => node.classList.contains(name)))")
         cdp.wait_for("initiations URL", "location.pathname === '/dashboard/initiations' && !location.search")
 
         mark = len(cdp.responses)

@@ -461,7 +461,7 @@ class HTTPIntegrationTests(unittest.TestCase):
         row = payload["rows"][0]
         self.assertEqual(set(row), DASHBOARD_ROW_KEYS)
         self.assertEqual((row["ticker"], row["metric"], row["direction"], row["holders"], row["name"]),
-                         ("MSFT", 1, "flat", 1, "Microsoft Corporation"))
+                         ("MSFT", 1, "up", 1, "Microsoft Corporation"))
         self.assertIsInstance(row["metric"], int)
 
     def test_dashboard_movers_view_for_both_sides_and_every_horizon(self) -> None:
@@ -677,6 +677,25 @@ class DashboardFixtureVariantTests(unittest.TestCase):
             status, _, body = http_request(address, "/api/dashboard?" + urlencode(query))
         self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
         return json.loads(body)
+
+    def test_initiations_direction_compares_new_holder_counts_with_the_prior_quarter(self) -> None:
+        # Fresh Initiations: up when a security gained more first-time holders than in the prior
+        # quarter, down when fewer, flat when equal; a missing prior row counts as zero.
+        with tempfile.TemporaryDirectory(prefix="13f-initiations-") as directory:
+            database = create_fixture_database(Path(directory) / "fixture.sqlite")
+            with closing(sqlite3.connect(database)) as con:
+                rows = (("FEWER", 5, 3, 1), ("SAME", 6, 2, 2), ("MORE", 7, 1, 4))
+                for ticker, security_id, previous_new, current_new in rows:
+                    con.execute("INSERT INTO securities VALUES (?,?,?,'COM','',?)",
+                                (security_id, f"{10000 + security_id}X104", f"{ticker} CORP", ticker))
+                    con.execute("INSERT INTO security_weight_stats VALUES (2,?,1,0.01,1.0,?)",
+                                (security_id, previous_new))
+                    con.execute("INSERT INTO security_weight_stats VALUES (3,?,1,0.01,1.0,?)",
+                                (security_id, current_new))
+                con.commit()
+            payload = self.dashboard(database, {"view": "initiations"})
+            self.assertEqual([(row["ticker"], row["metric"], row["direction"]) for row in payload["rows"]],
+                             [("MORE", 4, "up"), ("SAME", 2, "flat"), ("MSFT", 1, "up"), ("FEWER", 1, "down")])
 
     def test_movers_include_securities_fully_exited_since_the_comparison_period(self) -> None:
         # Section 1: movers cover the UNION of P and P-k, a missing side counting as zero.  A

@@ -1312,9 +1312,15 @@ class Handler(SimpleHTTPRequestHandler):
               LEFT JOIN security_weight_stats prev ON prev.period_id=:prev AND prev.security_id=r.security_id
               WHERE r.period_id=:cur{mapped})"""
         elif view == "initiations":
-            cte = f"""WITH ranked AS (SELECT {columns},'flat' direction,
+            # Direction compares this quarter's first-time holders with the security's
+            # count in the prior quarter (no prior row means zero new holders then).
+            cte = f"""WITH ranked AS (SELECT {columns},
+              CASE WHEN :prev IS NULL THEN 'flat'
+                WHEN r.new_holder_count>coalesce(prev.new_holder_count,0) THEN 'up'
+                WHEN r.new_holder_count<coalesce(prev.new_holder_count,0) THEN 'down' ELSE 'flat' END direction,
               r.new_holder_count metric,r.holder_count holders,r.avg_weight
               FROM security_weight_stats r {naming}
+              LEFT JOIN security_weight_stats prev ON prev.period_id=:prev AND prev.security_id=r.security_id
               WHERE r.period_id=:cur AND r.new_holder_count>0{mapped})"""
         else:
             if comparison is None:
